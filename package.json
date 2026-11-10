@@ -20,7 +20,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node dist/db/migrate.js",
     "db:migrate:dev": "tsx --env-file-if-exists=.env src/db/migrate.ts",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "richmenu:image": "tsx scripts/generate-richmenu-image.ts"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.6",
@@ -38,6 +39,7 @@
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.14.0",
     "prettier": "^3.9.10",
+    "sharp": "^0.35.5",
     "tsx": "^4.23.15",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.72.2",

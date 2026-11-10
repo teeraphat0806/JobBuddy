@@ -3,7 +3,8 @@
 ผู้ช่วยหางานใน LINE — รวมงานจากหลายเว็บ, บันทึกงานที่สมัคร, ปฏิทินสัมภาษณ์ และโน้ต ไว้ที่เดียว
 แค่เพิ่มเพื่อน LINE Official Account ก็ใช้ได้เลย
 
-> สถานะ: 🚧 เริ่มต้นโปรเจกต์
+> สถานะ: 🚧 ใช้งานได้: เพิ่มเพื่อน → ยอมรับ PDPA → ตั้งค่างานที่อยากได้ (5 ขั้น) → Rich Menu / ลบข้อมูลของฉัน
+> ถัดไป: ดึงงานจาก Greenhouse/Lever + ปุ่ม "งานใหม่วันนี้" + แชร์ให้เพื่อน
 
 ## ฟีเจอร์ (แผน)
 
@@ -38,12 +39,28 @@ src/
 ├── app.ts               # Hono routes: GET /health, POST /webhooks/line
 ├── config/env.ts        # ตรวจ environment variables ด้วย zod
 ├── db/                  # Drizzle schema, client, migration runner
-├── line/                # LINE messenger wrapper, event handlers, ข้อความตอบกลับ
-├── users/repository.ts  # เข้าถึงตาราง users
+├── line/
+│   ├── handlers.ts      # router: follow / consent / menu / wizard / ลบข้อมูล
+│   ├── messages.ts      # ข้อความตอบกลับทั้งหมด
+│   ├── richmenu.ts      # layout เมนู + sync กับ LINE ตอน start
+│   ├── messenger.ts     # wrapper ของ LINE Messaging API
+│   └── postback.ts, ui.ts
+├── prefs/               # ตั้งค่างาน: wizard (state machine), parse, repository
+├── conversation/        # สถานะการคุยหลายขั้น (หมดอายุ 30 นาที)
+├── users/repository.ts  # ตาราง users (+ consent, ลบข้อมูล)
 └── lib/logger.ts        # JSON logger
+assets/richmenu-main.png # รูป Rich Menu (สร้างด้วย npm run richmenu:image)
+scripts/                 # เครื่องมือสำหรับนักพัฒนา
 drizzle/                 # SQL migrations (สร้างด้วย npm run db:generate)
 tests/                   # vitest
 ```
+
+## Rich Menu
+
+- Layout อยู่ใน `MENU_ITEMS` ใน `src/line/richmenu.ts` ทุกปุ่มส่ง postback `a=menu&m=<key>`
+- ตอน start แอปจะ sync เมนูกับ LINE เอง (สร้าง → อัปโหลดรูป → ตั้งเป็นค่าเริ่มต้น → ลบเวอร์ชันเก่า)
+- แก้เมนู: แก้ `MENU_ITEMS` → `npm run richmenu:image` → **เพิ่มเลขเวอร์ชันใน `RICH_MENU_NAME`** → deploy
+- ปิดการ sync ด้วย `RICH_MENU_SYNC=false` (เช่น ตอนพัฒนาในเครื่องที่ไม่มี token จริง)
 
 ## การพัฒนาในเครื่อง
 
@@ -65,6 +82,7 @@ npm run dev                   # http://localhost:3000
 | `npm test`                           | รัน unit tests                                 |
 | `npm run typecheck` / `npm run lint` | ตรวจ type / lint                               |
 | `npm run db:generate`                | สร้าง migration ใหม่หลังแก้ `src/db/schema.ts` |
+| `npm run richmenu:image`             | สร้างรูป Rich Menu ใหม่จาก layout ในโค้ด       |
 | `npm run build`                      | compile เป็น `dist/`                           |
 
 ## Deploy บน Railway

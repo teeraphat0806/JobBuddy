@@ -7,6 +7,11 @@ const envSchema = z.object({
   LINE_CHANNEL_SECRET: z.string().min(1),
   LINE_CHANNEL_ACCESS_TOKEN: z.string().min(1),
   APP_TIMEZONE: z.string().default('Asia/Bangkok'),
+  /** Create/update the LINE rich menu on startup. Set to "false" to skip (e.g. local dev). */
+  RICH_MENU_SYNC: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
 });
 
 export type Env = z.infer<typeof envSchema>;

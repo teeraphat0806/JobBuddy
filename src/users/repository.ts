@@ -12,6 +12,11 @@ export interface UserRepository {
   upsertOnFollow(lineUserId: string, profile: LineProfile): Promise<User>;
   markUnfollowed(lineUserId: string): Promise<void>;
   findByLineUserId(lineUserId: string): Promise<User | undefined>;
+  /** Get the user, creating a bare row if missing (e.g. friends added before the bot existed). */
+  ensure(lineUserId: string): Promise<User>;
+  recordConsent(userId: string): Promise<void>;
+  /** PDPA "delete my data": removes the user and, via cascade, everything they own. */
+  deleteByLineUserId(lineUserId: string): Promise<void>;
 }
 
 export function createUserRepository(db: Db): UserRepository {
@@ -47,6 +52,25 @@ export function createUserRepository(db: Db): UserRepository {
 
     async findByLineUserId(lineUserId) {
       return db.query.users.findFirst({ where: eq(users.lineUserId, lineUserId) });
+    },
+
+    async ensure(lineUserId) {
+      // DO UPDATE (not DO NOTHING) so RETURNING yields the row whether or not it existed.
+      const [row] = await db
+        .insert(users)
+        .values({ lineUserId })
+        .onConflictDoUpdate({ target: users.lineUserId, set: { lineUserId } })
+        .returning();
+      if (!row) throw new Error('ensure returned no row');
+      return row;
+    },
+
+    async recordConsent(userId) {
+      await db.update(users).set({ pdpaConsentedAt: new Date() }).where(eq(users.id, userId));
+    },
+
+    async deleteByLineUserId(lineUserId) {
+      await db.delete(users).where(eq(users.lineUserId, lineUserId));
     },
   };
 }
