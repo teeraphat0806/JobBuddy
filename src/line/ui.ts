@@ -32,3 +32,31 @@ function clip(label: string): string {
   const chars = [...label];
   return chars.length <= 20 ? label : chars.slice(0, 19).join('') + '…';
 }
+
+/** Quick reply that opens LINE's native date+time picker; the choice arrives as a postback. */
+export function pickerButton(
+  label: string,
+  data: PostbackData,
+  opts: { initial?: string; min?: string; max?: string } = {},
+): messagingApi.QuickReplyItem {
+  return { type: 'action', action: pickerAction(label, data, opts) };
+}
+
+export function pickerAction(
+  label: string,
+  data: PostbackData,
+  opts: { initial?: string; min?: string; max?: string } = {},
+): messagingApi.DatetimePickerAction {
+  return {
+    type: 'datetimepicker',
+    label: clip(label),
+    data: encodePostback(data),
+    mode: 'datetime',
+    ...opts,
+  };
+}
+
+/** Quick reply that opens a URL. */
+export function linkButton(label: string, uri: string): messagingApi.QuickReplyItem {
+  return { type: 'action', action: { type: 'uri', label: clip(label), uri } };
+}

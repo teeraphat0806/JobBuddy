@@ -1,6 +1,14 @@
 import { getTableName, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
-import { conversationSessions, jobNotes, jobPreferences, jobs, userJobs, users } from './schema.js';
+import {
+  conversationSessions,
+  interviews,
+  jobNotes,
+  jobPreferences,
+  jobs,
+  userJobs,
+  users,
+} from './schema.js';
 
 /** Every table the app needs. Keep in sync with schema.ts. */
 export const REQUIRED_TABLES = [
@@ -9,6 +17,7 @@ export const REQUIRED_TABLES = [
   conversationSessions,
   jobs,
   userJobs,
+  interviews,
   jobNotes,
 ].map((t) => getTableName(t));
 

@@ -10,6 +10,8 @@ import { JOB_SOURCES } from './jobs/sources.js';
 import { startJobSyncScheduler } from './jobs/sync.js';
 import { createEventsHandler } from './line/handlers.js';
 import { createLineMessenger } from './line/messenger.js';
+import { createInterviewRepository } from './interviews/repository.js';
+import { startReminderScheduler } from './interviews/reminders.js';
 import { createLinkPreviewer } from './links/preview.js';
 import { createNoteRepository } from './notes/repository.js';
 import { createRichMenuApi, loadRichMenuImage, syncRichMenu } from './line/richmenu.js';
@@ -31,6 +33,7 @@ try {
 const { db, sql } = createDb(env.DATABASE_URL);
 const line = createLineMessenger(env.LINE_CHANNEL_ACCESS_TOKEN);
 const jobs = createJobRepository(db);
+const interviews = createInterviewRepository(db);
 
 // Filled in once at startup; shared job cards include it so friends can add the bot.
 let addFriendUrl: string | undefined;
@@ -50,6 +53,7 @@ const app = createApp({
     jobs,
     userJobs: createUserJobRepository(db),
     notes: createNoteRepository(db),
+    interviews,
     previewLink: createLinkPreviewer(),
     timeZone: env.APP_TIMEZONE,
     line,
@@ -79,9 +83,17 @@ const stopJobSync = env.JOB_SYNC
   ? startJobSyncScheduler(jobs, JOB_SOURCES, logger, env.JOB_SYNC_INTERVAL_HOURS * 60 * 60 * 1000)
   : () => {};
 
+const stopReminders = env.REMINDERS
+  ? startReminderScheduler(
+      { interviews, line, logger, timeZone: env.APP_TIMEZONE },
+      env.REMINDER_INTERVAL_MINUTES * 60 * 1000,
+    )
+  : () => {};
+
 async function shutdown(signal: string): Promise<void> {
   logger.info('Shutting down', { signal });
   stopJobSync();
+  stopReminders();
   server.close();
   try {
     await sql.end({ timeout: 5 });

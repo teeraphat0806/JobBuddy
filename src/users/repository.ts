@@ -15,6 +15,8 @@ export interface UserRepository {
   /** Get the user, creating a bare row if missing (e.g. friends added before the bot existed). */
   ensure(lineUserId: string): Promise<User>;
   recordConsent(userId: string): Promise<void>;
+  /** Interview reminders are pushes (they use the monthly quota), so users can turn them off. */
+  setReminders(userId: string, on: boolean): Promise<void>;
   /** PDPA "delete my data": removes the user and, via cascade, everything they own. */
   deleteByLineUserId(lineUserId: string): Promise<void>;
 }
@@ -67,6 +69,10 @@ export function createUserRepository(db: Db): UserRepository {
 
     async recordConsent(userId) {
       await db.update(users).set({ pdpaConsentedAt: new Date() }).where(eq(users.id, userId));
+    },
+
+    async setReminders(userId, on) {
+      await db.update(users).set({ notifyInterviewReminders: on }).where(eq(users.id, userId));
     },
 
     async deleteByLineUserId(lineUserId) {

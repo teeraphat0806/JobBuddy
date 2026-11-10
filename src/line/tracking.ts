@@ -11,7 +11,7 @@ import type { NoteRepository } from '../notes/repository.js';
 import { jobCarousel, type CardJob } from './jobCards.js';
 import type { OutgoingMessage } from './messenger.js';
 import { isStage, STAGE_LABEL, STAGES } from './stages.js';
-import { postbackButton, sayButton, text } from './ui.js';
+import { pickerButton, postbackButton, sayButton, text } from './ui.js';
 
 /** Conversation flows owned by this module (stored in conversation_sessions.flow). */
 export const NOTE_FLOW = 'note';
@@ -31,6 +31,8 @@ export interface TrackingDeps {
   previewLink: LinkPreviewer;
   timeZone?: string;
   getAddFriendUrl?: () => string | undefined;
+  /** Upcoming interview lines for a job, shown in its detail view. */
+  interviewLines?: (user: User, jobId: string) => Promise<string[]>;
 }
 
 interface FlowState {
@@ -52,6 +54,9 @@ const detailButton = (job: Job) =>
   postbackButton('📄 ดูโน้ต', { a: 'job', v: 'detail', j: job.id });
 const stageButton = (job: Job) =>
   postbackButton('🔄 อัปเดตสถานะ', { a: 'job', v: 'stage', j: job.id });
+
+const interviewButton = (job: Job) =>
+  pickerButton('📅 นัดสัมภาษณ์', { a: 'iv', v: 'new', j: job.id });
 
 const notFound = () => [text('ไม่พบงานนี้แล้วครับ อาจถูกลบออกจากระบบ')];
 
@@ -178,16 +183,18 @@ export function createTracking(deps: TrackingDeps) {
   async function detail(user: User, jobId: string): Promise<OutgoingMessage[]> {
     const job = await jobs.getById(jobId);
     if (!job) return notFound();
-    const [entry, list, total] = await Promise.all([
+    const [entry, list, total, ivLines] = await Promise.all([
       userJobs.get(user.id, job.id),
       notes.list(user.id, job.id, DETAIL_NOTES),
       notes.count(user.id, job.id),
+      deps.interviewLines?.(user, job.id) ?? Promise.resolve([]),
     ]);
 
     const lines = [`💼 ${job.title}`, `🏢 ${job.company}`];
     if (job.location) lines.push(`📍 ${job.location}`);
     if (entry?.status === 'applied') lines.push(`สถานะ: ${STAGE_LABEL[entry.stage ?? 'applied']}`);
     else if (entry?.status === 'saved') lines.push('สถานะ: ⭐ เก็บไว้');
+    lines.push(...ivLines);
     lines.push(`🔗 ${job.url}`, '');
     if (total === 0) {
       lines.push(
@@ -203,8 +210,9 @@ export function createTracking(deps: TrackingDeps) {
     if (body.length > LINE_TEXT_MAX) body = body.slice(0, LINE_TEXT_MAX - 1) + '…';
 
     const buttons = [noteButton(job)];
-    if (entry?.status === 'applied') buttons.push(stageButton(job), appliedListButton);
-    else {
+    if (entry?.status === 'applied') {
+      buttons.push(stageButton(job), interviewButton(job), appliedListButton);
+    } else {
       buttons.push(postbackButton('✅ สมัครแล้ว', { a: 'job', v: 'apply', j: job.id }));
       buttons.push(savedListButton);
     }
@@ -264,8 +272,8 @@ export function createTracking(deps: TrackingDeps) {
     const buttons = [appliedListButton, detailButton(job)];
     switch (value) {
       case 'interview':
-        lines.push('', '📅 จดวันเวลานัดไว้ในโน้ตก่อนได้เลยครับ (ระบบนัด + เตือนล่วงหน้ากำลังจะมา)');
-        buttons.unshift(noteButton(job, '➕ จดวันนัด'));
+        lines.push('', '📅 กดเลือกวันเวลานัด แล้วระบบจะเตือนให้ก่อนวันสัมภาษณ์ครับ');
+        buttons.unshift(interviewButton(job));
         break;
       case 'offer':
         lines.push('', 'ยินดีด้วยครับ!! 🎉🎉');

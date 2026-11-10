@@ -177,3 +177,31 @@ export const jobNotes = pgTable(
 );
 
 export type JobNote = typeof jobNotes.$inferSelect;
+
+/** A scheduled interview for one of the user's jobs (a job can have several rounds). */
+export const interviews = pgTable(
+  'interviews',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    jobId: uuid('job_id')
+      .notNull()
+      .references(() => jobs.id, { onDelete: 'cascade' }),
+    startsAt: timestamp('starts_at', { withTimezone: true }).notNull(),
+    /** Address, "Online", or a meeting link. */
+    place: text('place'),
+    /** When startsAt was last set; reminders that were already due by then are skipped. */
+    scheduledAt: timestamp('scheduled_at', { withTimezone: true }).notNull().defaultNow(),
+    remindedEveningAt: timestamp('reminded_evening_at', { withTimezone: true }),
+    remindedSoonAt: timestamp('reminded_soon_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('interviews_user_starts_idx').on(t.userId, t.startsAt),
+    index('interviews_starts_idx').on(t.startsAt),
+  ],
+);
+
+export type Interview = typeof interviews.$inferSelect;

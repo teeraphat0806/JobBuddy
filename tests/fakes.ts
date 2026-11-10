@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { webhook } from '@line/bot-sdk';
 import { vi } from 'vitest';
 import type { SessionRepository } from '../src/conversation/repository.js';
-import type { Job, User } from '../src/db/schema.js';
+import type { Interview, Job, User } from '../src/db/schema.js';
+import type { InterviewRepository } from '../src/interviews/repository.js';
 import {
   LINK_PROVIDER,
   type ApplicationStage,
@@ -39,7 +40,8 @@ function newUser(lineUserId: string): User {
 }
 
 /** In-memory stand-ins for the DB repositories, so whole conversations can be tested. */
-export function createFakeBot() {
+export function createFakeBot(opts: { now?: () => Date } = {}) {
+  const now = opts.now ?? (() => new Date());
   const usersByLineId = new Map<string, User>();
   const prefsByUser = new Map<string, PrefsInput>();
   const sessionsByUser = new Map<string, { flow: string; state: unknown }>();
@@ -67,6 +69,9 @@ export function createFakeBot() {
     },
     async recordConsent(userId) {
       for (const u of usersByLineId.values()) if (u.id === userId) u.pdpaConsentedAt = new Date();
+    },
+    async setReminders(userId, on) {
+      for (const u of usersByLineId.values()) if (u.id === userId) u.notifyInterviewReminders = on;
     },
     async deleteByLineUserId(lineUserId) {
       const u = usersByLineId.get(lineUserId);
@@ -198,6 +203,70 @@ export function createFakeBot() {
       noteRows.filter((n) => n.userId === userId && n.jobId === jobId).length,
   };
 
+  const interviewRows = new Map<string, Interview>();
+  const withJob = (iv: Interview) => ({ interview: { ...iv }, job: jobRows.get(iv.jobId)! });
+  const interviews: InterviewRepository = {
+    async create(userId, jobId, startsAt) {
+      const iv: Interview = {
+        id: randomUUID(),
+        userId,
+        jobId,
+        startsAt,
+        place: null,
+        scheduledAt: now(),
+        remindedEveningAt: null,
+        remindedSoonAt: null,
+        createdAt: now(),
+      };
+      interviewRows.set(iv.id, iv);
+      return { ...iv };
+    },
+    async get(userId, id) {
+      const iv = interviewRows.get(id);
+      return iv && iv.userId === userId ? withJob(iv) : undefined;
+    },
+    async reschedule(userId, id, startsAt) {
+      const iv = interviewRows.get(id);
+      if (!iv || iv.userId !== userId) return false;
+      Object.assign(iv, {
+        startsAt,
+        scheduledAt: now(),
+        remindedEveningAt: null,
+        remindedSoonAt: null,
+      });
+      return true;
+    },
+    async setPlace(userId, id, place) {
+      const iv = interviewRows.get(id);
+      if (!iv || iv.userId !== userId) return false;
+      iv.place = place;
+      return true;
+    },
+    async remove(userId, id) {
+      const iv = interviewRows.get(id);
+      if (!iv || iv.userId !== userId) return false;
+      return interviewRows.delete(id);
+    },
+    async upcoming(userId, from, limit) {
+      return [...interviewRows.values()]
+        .filter((iv) => iv.userId === userId && iv.startsAt > from)
+        .sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime())
+        .slice(0, limit)
+        .map(withJob);
+    },
+    async upcomingForJob(userId, jobId, from) {
+      return [...interviewRows.values()].filter(
+        (iv) => iv.userId === userId && iv.jobId === jobId && iv.startsAt > from,
+      );
+    },
+    async reminderCandidates() {
+      return [];
+    },
+    async claimReminder() {
+      return true;
+    },
+  };
+
   /** What the fake link previewer returns; tests overwrite it. */
   const linkPreview: { next: Omit<LinkPreview, 'url'> } = {
     next: { title: null, company: null, location: '', department: null, workplace: null },
@@ -224,9 +293,11 @@ export function createFakeBot() {
     jobs,
     userJobs,
     notes,
+    interviews,
     previewLink,
     line,
     logger: silentLogger,
+    now,
     getAddFriendUrl: () => 'https://line.me/R/ti/p/%40jobbuddy',
   });
 
@@ -256,6 +327,7 @@ export function createFakeBot() {
     jobRows,
     userJobRows,
     noteRows,
+    interviewRows,
     linkPreview,
     previewLink,
     addJob,
@@ -283,6 +355,14 @@ export function createFakeBot() {
         type: 'postback',
         replyToken: 'rt',
         postback: { data: encodePostback(data) },
+      } as webhook.Event),
+    /** A date/time picker choice, e.g. "2026-11-15T14:00". */
+    pick: (data: PostbackData, datetime: string, userId = 'U1') =>
+      send({
+        ...base(userId),
+        type: 'postback',
+        replyToken: 'rt',
+        postback: { data: encodePostback(data), params: { datetime } },
       } as webhook.Event),
     sticker: (userId = 'U1') =>
       send({

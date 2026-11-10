@@ -2,6 +2,7 @@ import type { webhook } from '@line/bot-sdk';
 import type { SessionRepository } from '../conversation/repository.js';
 import type { User } from '../db/schema.js';
 import { errorFields, httpStatusOf, type Logger } from '../lib/logger.js';
+import type { InterviewRepository } from '../interviews/repository.js';
 import type { JobRepository, UserJobRepository } from '../jobs/repository.js';
 import { extractUrl, type LinkPreviewer } from '../links/preview.js';
 import type { NoteRepository } from '../notes/repository.js';
@@ -15,6 +16,15 @@ import {
   type WizardResult,
 } from '../prefs/wizard.js';
 import type { LineProfile, UserRepository } from '../users/repository.js';
+import {
+  asPlaceFlow,
+  asTimeFlow,
+  createInterviewFlows,
+  IV_PLACE_FLOW,
+  IV_TIME_FLOW,
+  REMINDER_OFF_WORDS,
+  REMINDER_ON_WORDS,
+} from './interviews.js';
 import { createJobActions } from './jobActions.js';
 import * as msg from './messages.js';
 import type { LineMessenger, OutgoingMessage } from './messenger.js';
@@ -28,11 +38,13 @@ export interface HandlerDeps {
   jobs: JobRepository;
   userJobs: UserJobRepository;
   notes: NoteRepository;
+  interviews: InterviewRepository;
   previewLink: LinkPreviewer;
   line: LineMessenger;
   logger: Logger;
   getAddFriendUrl?: () => string | undefined;
   timeZone?: string;
+  now?: () => Date;
 }
 
 export type EventsHandler = (events: webhook.Event[]) => Promise<void>;
@@ -44,6 +56,7 @@ type Input =
 const HELP_WORDS = ['วิธีใช้', 'help', 'เมนู', 'ช่วยด้วย', '?'];
 const PREFS_WORDS = ['ตั้งค่า', 'ตั้งค่างาน', 'settings'];
 const FEED_WORDS = ['งาน', 'งานใหม่', 'งานใหม่วันนี้', 'หางาน', 'jobs'];
+const INTERVIEW_WORDS = ['นัด', 'นัดสัมภาษณ์', 'สัมภาษณ์', 'interview'];
 const DELETE_WORDS = ['ลบข้อมูลของฉัน', 'ลบข้อมูล'];
 
 function userIdOf(event: webhook.Event): string | undefined {
@@ -51,8 +64,12 @@ function userIdOf(event: webhook.Event): string | undefined {
 }
 
 function inputOf(event: webhook.Event): Input | undefined {
-  if (event.type === 'postback')
-    return { kind: 'postback', data: decodePostback(event.postback.data) };
+  if (event.type === 'postback') {
+    const data = decodePostback(event.postback.data);
+    // Date/time pickers deliver the chosen value outside `data`.
+    const dt = event.postback.params?.datetime;
+    return { kind: 'postback', data: dt ? { ...data, dt } : data };
+  }
   if (event.type === 'message') {
     return event.message.type === 'text'
       ? { kind: 'text', text: event.message.text.trim() }
@@ -64,7 +81,8 @@ function inputOf(event: webhook.Event): Input | undefined {
 export function createEventsHandler(deps: HandlerDeps): EventsHandler {
   const { users, prefs, sessions, line, logger } = deps;
   const jobActions = createJobActions(deps);
-  const tracking = createTracking(deps);
+  const interviewFlows = createInterviewFlows(deps);
+  const tracking = createTracking({ ...deps, interviewLines: interviewFlows.linesForJob });
 
   async function showFeed(user: User, page: number): Promise<OutgoingMessage[]> {
     const result = await jobActions.feed(user, page);
@@ -134,6 +152,8 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
           return showOrStartPrefs(user);
         case 'help':
           return [msg.helpMessage()];
+        case 'interviews':
+          return interviewFlows.list(user);
         default:
           return [msg.comingSoon(pb.m ?? '')];
       }
@@ -162,9 +182,36 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
       return tracking.setStage(user, pb.j, pb.v);
     }
     if (pb?.a === 'title') return tracking.skipTitle(user);
+    if (pb?.a === 'iv') {
+      await sessions.clear(user.id);
+      if (pb.v === 'new' && pb.j) return interviewFlows.create(user, pb.j, pb.dt);
+      if (pb.v === 'ask' && pb.j) return interviewFlows.ask(user, pb.j);
+      if (pb.i) {
+        switch (pb.v) {
+          case 'move':
+            return interviewFlows.move(user, pb.i, pb.dt);
+          case 'place':
+            return interviewFlows.askPlace(user, pb.i);
+          case 'del':
+            return interviewFlows.confirmRemove(user, pb.i);
+          case 'delok':
+            return interviewFlows.remove(user, pb.i);
+        }
+      }
+      return [msg.notUnderstood()];
+    }
 
     const session = await sessions.get(user.id);
     const flow = session ? asFlowState(session.state) : null;
+    if (typed !== undefined && session?.flow === IV_TIME_FLOW) {
+      const state = asTimeFlow(session.state);
+      const reply = state ? await interviewFlows.typedTime(user, state, typed) : null;
+      if (reply) return reply;
+    }
+    if (typed !== undefined && session?.flow === IV_PLACE_FLOW) {
+      const state = asPlaceFlow(session.state);
+      if (state) return interviewFlows.savePlace(user, state, typed);
+    }
     if (typed !== undefined && flow) {
       if (session?.flow === NOTE_FLOW) return tracking.saveNote(user, flow.jobId, typed);
       if (session?.flow === LINK_TITLE_FLOW && !extractUrl(typed)) {
@@ -188,6 +235,9 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
       if (PREFS_WORDS.includes(lower)) return showOrStartPrefs(user);
       if (FEED_WORDS.includes(lower)) return showFeed(user, 1);
       if (HELP_WORDS.includes(lower)) return [msg.helpMessage()];
+      if (INTERVIEW_WORDS.includes(lower)) return interviewFlows.list(user);
+      if (REMINDER_OFF_WORDS.includes(lower)) return interviewFlows.setReminders(user, false);
+      if (REMINDER_ON_WORDS.includes(lower)) return interviewFlows.setReminders(user, true);
     }
     return [msg.notUnderstood()];
   }

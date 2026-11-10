@@ -92,6 +92,23 @@ ALTER TABLE "job_notes" ADD CONSTRAINT "job_notes_job_id_jobs_id_fk" FOREIGN KEY
 CREATE INDEX "job_notes_user_job_idx" ON "job_notes" USING btree ("user_id","job_id");
 UPDATE "user_jobs" SET "stage" = 'applied' WHERE "status" = 'applied';
 
+-- 0004_interviews
+CREATE TABLE "interviews" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"user_id" uuid NOT NULL,
+	"job_id" uuid NOT NULL,
+	"starts_at" timestamp with time zone NOT NULL,
+	"place" text,
+	"scheduled_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"reminded_evening_at" timestamp with time zone,
+	"reminded_soon_at" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+ALTER TABLE "interviews" ADD CONSTRAINT "interviews_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "interviews" ADD CONSTRAINT "interviews_job_id_jobs_id_fk" FOREIGN KEY ("job_id") REFERENCES "public"."jobs"("id") ON DELETE cascade ON UPDATE no action;
+CREATE INDEX "interviews_user_starts_idx" ON "interviews" USING btree ("user_id","starts_at");
+CREATE INDEX "interviews_starts_idx" ON "interviews" USING btree ("starts_at");
+
 CREATE SCHEMA IF NOT EXISTS drizzle;
 CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
   id SERIAL PRIMARY KEY,
@@ -102,6 +119,7 @@ INSERT INTO drizzle.__drizzle_migrations (hash, created_at) VALUES
   ('be2479f4dd45266a77c2b6c28934fb3aa0be59853ed9f2bdecdc148a626a9a17', 1794279984730),
   ('c5fa00ff59f54efe3bb09e5ec546b26aa056ad802a977e0b9998a67064a82f07', 1794283471695),
   ('cffb8dccdb5e66548c9d0c29b312271cb822135eed80658d2171d02d412ce51e', 1794284280351),
-  ('7f70905c458d98678c246b5c1c6f116645ca824345eb978e25a8a8749ab68807', 1794292167557);
+  ('7f70905c458d98678c246b5c1c6f116645ca824345eb978e25a8a8749ab68807', 1794292167557),
+  ('5eebfe124dd42029b3e8868bd913f581595897fde6a22d0723e217ae4f429c34', 1794293147776);
 
 COMMIT;

@@ -120,9 +120,9 @@ describe('preferences wizard', () => {
 });
 
 describe('menu and commands', () => {
-  it('answers not-yet-built menu items with a coming-soon message', async () => {
+  it('answers unknown menu items with a coming-soon message', async () => {
     const bot = await consentedBot();
-    expect((await bot.tap({ a: 'menu', m: 'interviews' }))[0]).toContain('กำลังพัฒนา');
+    expect((await bot.tap({ a: 'menu', m: 'something-new' }))[0]).toContain('กำลังพัฒนา');
   });
 
   it('replies to unknown text and stickers with guidance', async () => {

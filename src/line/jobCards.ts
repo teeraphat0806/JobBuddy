@@ -77,6 +77,21 @@ function jobAction(
   };
 }
 
+/** Opens LINE's date/time picker; the choice comes back as an `a=iv&v=new` postback. */
+function interviewPicker(job: CardJob): messagingApi.FlexButton {
+  return {
+    type: 'button',
+    style: 'secondary',
+    height: 'sm',
+    action: {
+      type: 'datetimepicker',
+      label: '📅 นัดสัมภาษณ์',
+      data: encodePostback({ a: 'iv', v: 'new', j: job.id }),
+      mode: 'datetime',
+    },
+  };
+}
+
 function row(...contents: messagingApi.FlexComponent[]): messagingApi.FlexBox {
   return { type: 'box', layout: 'horizontal', spacing: 'sm', contents };
 }
@@ -161,7 +176,7 @@ export function jobBubble(
       break;
     case 'applied':
       footer.push(row(jobAction('🔄 อัปเดตสถานะ', 'stage', job), notes));
-      footer.push(share);
+      footer.push(row(interviewPicker(job), share));
       break;
   }
 

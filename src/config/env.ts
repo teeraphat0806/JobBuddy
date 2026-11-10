@@ -18,6 +18,12 @@ const envSchema = z.object({
     .default('true')
     .transform((v) => v === 'true'),
   JOB_SYNC_INTERVAL_HOURS: z.coerce.number().positive().max(168).default(6),
+  /** Push interview reminders (uses the LINE monthly push quota). */
+  REMINDERS: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  REMINDER_INTERVAL_MINUTES: z.coerce.number().positive().max(60).default(5),
 });
 
 export type Env = z.infer<typeof envSchema>;
