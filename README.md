@@ -4,8 +4,9 @@
 แค่เพิ่มเพื่อน LINE Official Account ก็ใช้ได้เลย
 
 > สถานะ: 🚧 ใช้งานได้: PDPA → ตั้งค่างาน → 🔍 งานใหม่วันนี้ (~480 งานในไทยจาก 15 บริษัท) →
-> ⭐ เก็บไว้ / ✅ สมัครแล้ว / ❌ ไม่สนใจ / 📤 แชร์ให้เพื่อน → ดูรายการที่เก็บ/สมัครไว้
-> ถัดไป: ส่งลิงก์งานเอง + เปลี่ยนสถานะการสมัคร + โน้ต
+> ⭐ เก็บไว้ / ✅ สมัครแล้ว / ❌ ไม่สนใจ / 📤 แชร์ให้เพื่อน → ดูรายการที่เก็บ/สมัครไว้ →
+> 📥 ส่งลิงก์งานจากเว็บไหนก็ได้ → 🔄 สถานะการสมัคร → 📝 โน้ตต่องาน
+> ถัดไป: นัดสัมภาษณ์ + เตือนล่วงหน้า
 
 ## ฟีเจอร์ (แผน)
 
@@ -51,10 +52,16 @@ src/
 │   ├── handlers.ts      # router: follow / consent / menu / wizard / งาน / ลบข้อมูล
 │   ├── jobActions.ts    # ฟีดงาน, เก็บ/สมัคร/ซ่อน, รายการที่เก็บ/สมัครไว้
 │   ├── jobCards.ts      # การ์ดงาน (Flex carousel) + ลิงก์แชร์ให้เพื่อน
+│   ├── tracking.ts      # ส่งลิงก์งาน, โน้ต, สถานะการสมัคร
+│   ├── stages.ts        # ขั้นของการสมัคร: สมัครแล้ว → ติดต่อ → สัมภาษณ์ → รอผล → ได้/ไม่ได้
 │   ├── messages.ts      # ข้อความตอบกลับทั้งหมด
 │   ├── richmenu.ts      # layout เมนู + sync กับ LINE ตอน start
 │   ├── messenger.ts     # wrapper ของ LINE Messaging API
 │   └── postback.ts, ui.ts
+├── links/
+│   ├── preview.ts       # อ่านชื่องานจากลิงก์: ATS API หรือ <title>/og: ของหน้าเว็บ
+│   └── safeFetch.ts     # ดึงหน้าเว็บแบบกัน SSRF (ห้าม IP ภายใน/พอร์ตแปลก)
+├── notes/repository.ts  # โน้ตต่องาน
 ├── prefs/               # ตั้งค่างาน: wizard (state machine), parse, repository
 ├── conversation/        # สถานะการคุยหลายขั้น (หมดอายุ 30 นาที)
 ├── users/repository.ts  # ตาราง users (+ consent, ลบข้อมูล)
@@ -74,6 +81,15 @@ tests/                   # vitest
 - บอร์ดที่ดึงไม่สำเร็จจะ **ไม่** ถูกปิดงาน (กัน API ล่มชั่วคราวแล้วงานหายหมด)
 - เพิ่มบริษัท: ตรวจว่าบอร์ดมีงานในไทย แล้วเพิ่มใน `src/jobs/sources.ts`
 - ปิดการดึงด้วย `JOB_SYNC=false`, เปลี่ยนรอบด้วย `JOB_SYNC_INTERVAL_HOURS`
+
+### งานจากลิงก์ที่ผู้ใช้ส่งมา
+
+- ลิงก์ Greenhouse / Lever / SmartRecruiters → อ่านผ่าน API สาธารณะ (ถ้าเป็นงานที่ sync อยู่แล้วจะใช้แถวเดิม)
+- เว็บอื่น → ดึงหน้าเว็บ **ครั้งเดียว** อ่านแค่ `<title>` / `og:title` / `og:site_name` (เหมือน link preview)
+  ถ้าอ่านไม่ได้ (ต้องล็อกอิน, กันบอท) บอทจะถามชื่อตำแหน่งจากผู้ใช้แทน
+- เก็บเป็น `provider = 'link'` — ไม่โผล่ในฟีดของคนอื่น
+- `safeFetch` ปฏิเสธ IP ภายใน (127/8, 10/8, 169.254/16, …), `localhost`, `*.internal` และพอร์ตที่ไม่ใช่ 80/443
+  ตรวจตอน DNS lookup ของ socket จริง จึงกัน DNS rebinding ด้วย
 
 ## Rich Menu
 
@@ -119,6 +135,11 @@ npm run dev                   # http://localhost:3000
 `railway.json` กำหนดให้รัน migration ก่อน deploy ทุกครั้ง และใช้ `/health` เป็น healthcheck
 
 ค่าลับทั้งหมด (LINE channel secret/token, DATABASE_URL, API keys) เก็บใน environment variables เท่านั้น — ห้าม commit ลง repo
+
+### สร้างตารางด้วยมือ
+
+[`scripts/init-db.sql`](scripts/init-db.sql) = ทุก migration + แถว journal ของ drizzle รันใน query console
+ของ DB **ว่าง** ได้เลย (สร้างใหม่ด้วย `npm run db:init-sql` หลัง `npm run db:generate`)
 
 ### Database has no tables (migrate ผ่านแต่ไม่มีตาราง)
 

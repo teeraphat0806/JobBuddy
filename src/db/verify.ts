@@ -1,11 +1,16 @@
 import { getTableName, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
-import { conversationSessions, jobPreferences, jobs, userJobs, users } from './schema.js';
+import { conversationSessions, jobNotes, jobPreferences, jobs, userJobs, users } from './schema.js';
 
 /** Every table the app needs. Keep in sync with schema.ts. */
-export const REQUIRED_TABLES = [users, jobPreferences, conversationSessions, jobs, userJobs].map(
-  (t) => getTableName(t),
-);
+export const REQUIRED_TABLES = [
+  users,
+  jobPreferences,
+  conversationSessions,
+  jobs,
+  userJobs,
+  jobNotes,
+].map((t) => getTableName(t));
 
 /** Tables the app needs that don't exist in the `public` schema. */
 export async function missingTables(db: Db): Promise<string[]> {

@@ -10,6 +10,8 @@ import { JOB_SOURCES } from './jobs/sources.js';
 import { startJobSyncScheduler } from './jobs/sync.js';
 import { createEventsHandler } from './line/handlers.js';
 import { createLineMessenger } from './line/messenger.js';
+import { createLinkPreviewer } from './links/preview.js';
+import { createNoteRepository } from './notes/repository.js';
 import { createRichMenuApi, loadRichMenuImage, syncRichMenu } from './line/richmenu.js';
 import { errorFields, logger } from './lib/logger.js';
 import { createPrefsRepository } from './prefs/repository.js';
@@ -47,6 +49,9 @@ const app = createApp({
     sessions: createSessionRepository(db),
     jobs,
     userJobs: createUserJobRepository(db),
+    notes: createNoteRepository(db),
+    previewLink: createLinkPreviewer(),
+    timeZone: env.APP_TIMEZONE,
     line,
     logger,
     getAddFriendUrl: () => addFriendUrl,

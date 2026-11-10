@@ -3,6 +3,8 @@ import type { SessionRepository } from '../conversation/repository.js';
 import type { User } from '../db/schema.js';
 import { errorFields, httpStatusOf, type Logger } from '../lib/logger.js';
 import type { JobRepository, UserJobRepository } from '../jobs/repository.js';
+import { extractUrl, type LinkPreviewer } from '../links/preview.js';
+import type { NoteRepository } from '../notes/repository.js';
 import type { PrefsRepository } from '../prefs/repository.js';
 import {
   advanceWizard,
@@ -17,6 +19,7 @@ import { createJobActions } from './jobActions.js';
 import * as msg from './messages.js';
 import type { LineMessenger, OutgoingMessage } from './messenger.js';
 import { decodePostback, type PostbackData } from './postback.js';
+import { asFlowState, createTracking, LINK_TITLE_FLOW, NOTE_FLOW } from './tracking.js';
 
 export interface HandlerDeps {
   users: UserRepository;
@@ -24,9 +27,12 @@ export interface HandlerDeps {
   sessions: SessionRepository;
   jobs: JobRepository;
   userJobs: UserJobRepository;
+  notes: NoteRepository;
+  previewLink: LinkPreviewer;
   line: LineMessenger;
   logger: Logger;
   getAddFriendUrl?: () => string | undefined;
+  timeZone?: string;
 }
 
 export type EventsHandler = (events: webhook.Event[]) => Promise<void>;
@@ -58,6 +64,7 @@ function inputOf(event: webhook.Event): Input | undefined {
 export function createEventsHandler(deps: HandlerDeps): EventsHandler {
   const { users, prefs, sessions, line, logger } = deps;
   const jobActions = createJobActions(deps);
+  const tracking = createTracking(deps);
 
   async function showFeed(user: User, page: number): Promise<OutgoingMessage[]> {
     const result = await jobActions.feed(user, page);
@@ -137,9 +144,36 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
       const page = Number.parseInt(pb.p ?? '1', 10);
       return showFeed(user, Number.isFinite(page) && page > 0 ? page : 1);
     }
-    if (pb?.a === 'job' && pb.v && pb.j) return jobActions.act(user, pb.v, pb.j);
+    if (pb?.a === 'job' && pb.v && pb.j) {
+      await sessions.clear(user.id); // e.g. abandon a half-typed note
+      switch (pb.v) {
+        case 'detail':
+          return tracking.detail(user, pb.j);
+        case 'note':
+          return tracking.startNote(user, pb.j);
+        case 'stage':
+          return tracking.stageMenu(user, pb.j);
+        default:
+          return jobActions.act(user, pb.v, pb.j);
+      }
+    }
+    if (pb?.a === 'stage' && pb.v && pb.j) {
+      await sessions.clear(user.id);
+      return tracking.setStage(user, pb.j, pb.v);
+    }
+    if (pb?.a === 'title') return tracking.skipTitle(user);
 
     const session = await sessions.get(user.id);
+    const flow = session ? asFlowState(session.state) : null;
+    if (typed !== undefined && flow) {
+      if (session?.flow === NOTE_FLOW) return tracking.saveNote(user, flow.jobId, typed);
+      if (session?.flow === LINK_TITLE_FLOW && !extractUrl(typed)) {
+        return tracking.nameJob(user, flow.jobId, typed);
+      }
+    }
+    const link = typed !== undefined ? extractUrl(typed) : null;
+    if (link) return tracking.addLink(user, link);
+
     const wizard = session?.flow === WIZARD_FLOW ? asWizardState(session.state) : null;
     if (wizard) {
       let wizardInput: WizardInput | undefined;

@@ -21,7 +21,8 @@
     "db:migrate": "node dist/db/migrate.js",
     "db:migrate:dev": "tsx --env-file-if-exists=.env src/db/migrate.ts",
     "db:studio": "drizzle-kit studio",
-    "richmenu:image": "tsx scripts/generate-richmenu-image.ts"
+    "richmenu:image": "tsx scripts/generate-richmenu-image.ts",
+    "db:init-sql": "tsx scripts/generate-init-sql.ts"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.6",

@@ -1,7 +1,9 @@
 import type { messagingApi } from '@line/bot-sdk';
+import type { ApplicationStage } from '../jobs/repository.js';
 import type { Workplace } from '../jobs/types.js';
 import type { OutgoingMessage } from './messenger.js';
 import { encodePostback } from './postback.js';
+import { STAGE_LABEL } from './stages.js';
 
 export interface CardJob {
   id: string;
@@ -12,6 +14,9 @@ export interface CardJob {
   workplace: Workplace | null;
   url: string;
   active: boolean;
+  /** Application stage, shown on 'applied' cards. */
+  stage?: ApplicationStage | null;
+  noteCount?: number;
 }
 
 export type CardVariant = 'feed' | 'saved' | 'applied';
@@ -35,7 +40,9 @@ const truncate = (s: string, max: number) => {
  */
 export function shareUrl(job: CardJob, addFriendUrl?: string): string {
   const build = (title: string, withFooter: boolean) => {
-    const lines = [`💼 ${title}`, `🏢 ${job.company}`, `📍 ${job.location}`, `🔗 ${job.url}`];
+    const lines = [`💼 ${title}`, `🏢 ${job.company}`];
+    if (job.location) lines.push(`📍 ${job.location}`);
+    lines.push(`🔗 ${job.url}`);
     if (withFooter && addFriendUrl) lines.push('', `หางานง่ายๆ ใน LINE 👉 ${addFriendUrl}`);
     return `https://line.me/R/share?text=${encodeURIComponent(lines.join('\n'))}`;
   };
@@ -106,9 +113,19 @@ export function jobBubble(
       maxLines: 1,
     },
     { type: 'text', text: job.title, size: 'lg', weight: 'bold', wrap: true, maxLines: 3 },
-    infoLine('📍', job.location),
   ];
+  if (job.location) body.push(infoLine('📍', job.location));
   if (job.department) body.push(infoLine('🏷️', job.department));
+  if (variant === 'applied' && job.stage) {
+    body.push({
+      type: 'text',
+      text: `สถานะ: ${STAGE_LABEL[job.stage]}`,
+      size: 'sm',
+      weight: 'bold',
+      color: '#111111',
+      wrap: true,
+    });
+  }
   if (tags.length)
     body.push({ type: 'text', text: tags.join(' · '), size: 'xs', color: '#999999', wrap: true });
 
@@ -126,6 +143,8 @@ export function jobBubble(
     action: { type: 'uri', label: '📤 แชร์', uri: shareUrl(job, opts.addFriendUrl) },
   };
 
+  const notes = jobAction(job.noteCount ? `📝 โน้ต (${job.noteCount})` : '📝 โน้ต', 'detail', job);
+
   const footer: messagingApi.FlexComponent[] = [details];
   switch (variant) {
     case 'feed':
@@ -138,9 +157,10 @@ export function jobBubble(
       footer.push(
         row(jobAction('✅ สมัครแล้ว', 'apply', job), jobAction('🗑️ เอาออก', 'unsave', job)),
       );
-      footer.push(share);
+      footer.push(row(notes, share));
       break;
     case 'applied':
+      footer.push(row(jobAction('🔄 อัปเดตสถานะ', 'stage', job), notes));
       footer.push(share);
       break;
   }

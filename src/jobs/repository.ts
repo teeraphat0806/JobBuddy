@@ -1,33 +1,78 @@
-import { and, desc, eq, lt, max, sql } from 'drizzle-orm';
+import { and, desc, eq, lt, max, ne, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { jobs, userJobs, type Job } from '../db/schema.js';
+import { jobNotes, jobs, userJobs, type Job } from '../db/schema.js';
 import type { JobListing } from './types.js';
 
 export type UserJobStatus = 'saved' | 'applied' | 'hidden';
+export type ApplicationStage =
+  'applied' | 'contacted' | 'interview' | 'waiting' | 'offer' | 'rejected';
+
+/** Jobs a user added by sending a link; kept out of everyone's feed. */
+export const LINK_PROVIDER = 'link';
+
+export interface LinkJobInput {
+  board: string;
+  externalId: string;
+  company: string;
+  title: string;
+  location: string;
+  department: string | null;
+  workplace: Job['workplace'];
+  url: string;
+}
+
+export interface UserJobEntry {
+  status: UserJobStatus;
+  stage: ApplicationStage | null;
+}
+
+export interface ListedJob {
+  job: Job;
+  stage: ApplicationStage | null;
+  noteCount: number;
+}
 
 export interface JobRepository {
   upsertListings(listings: JobListing[], seenAt: Date): Promise<void>;
   /** Deactivate a board's jobs that weren't seen in the run that started at `seenAt`. */
   deactivateMissing(provider: string, board: string, seenAt: Date): Promise<number>;
+  /** Active jobs from synced job boards (excludes jobs users added by link). */
   listActive(): Promise<Job[]>;
   getById(id: string): Promise<Job | undefined>;
+  findByUrl(url: string): Promise<Job | undefined>;
+  findBySource(provider: string, board: string, externalId: string): Promise<Job | undefined>;
+  /** Insert a user-submitted job, or return the existing one for the same link. */
+  createLinkJob(input: LinkJobInput): Promise<Job>;
+  rename(id: string, title: string, company?: string): Promise<void>;
   lastSyncedAt(): Promise<Date | null>;
 }
 
 export interface UserJobRepository {
   /** Map of jobId -> status for everything this user has acted on. */
   statuses(userId: string): Promise<Map<string, UserJobStatus>>;
-  getStatus(userId: string, jobId: string): Promise<UserJobStatus | undefined>;
+  get(userId: string, jobId: string): Promise<UserJobEntry | undefined>;
+  /** Setting 'applied' starts the stage at 'applied' unless it is already further along. */
   setStatus(userId: string, jobId: string, status: UserJobStatus): Promise<void>;
+  /** Moves an application to `stage`, marking the job applied if it wasn't. */
+  setStage(userId: string, jobId: string, stage: ApplicationStage): Promise<void>;
   clear(userId: string, jobId: string): Promise<void>;
   /** Most recently updated first. */
-  list(userId: string, status: UserJobStatus, limit: number): Promise<Job[]>;
+  list(userId: string, status: UserJobStatus, limit: number): Promise<ListedJob[]>;
   count(userId: string, status: UserJobStatus): Promise<number>;
 }
 
 const CHUNK = 200;
 
 export function createJobRepository(db: Db): JobRepository {
+  const findBySource: JobRepository['findBySource'] = (provider, board, externalId) =>
+    db.query.jobs.findFirst({
+      where: and(
+        eq(jobs.provider, provider),
+        eq(jobs.board, board),
+        eq(jobs.externalId, externalId),
+      ),
+    });
+
   return {
     async upsertListings(listings, seenAt) {
       for (let i = 0; i < listings.length; i += CHUNK) {
@@ -74,9 +119,36 @@ export function createJobRepository(db: Db): JobRepository {
       return rows.length;
     },
 
-    listActive: () => db.select().from(jobs).where(eq(jobs.active, true)),
+    listActive: () =>
+      db
+        .select()
+        .from(jobs)
+        .where(and(eq(jobs.active, true), ne(jobs.provider, LINK_PROVIDER))),
 
     getById: (id) => db.query.jobs.findFirst({ where: eq(jobs.id, id) }),
+
+    findByUrl: (url) => db.query.jobs.findFirst({ where: eq(jobs.url, url) }),
+
+    findBySource,
+
+    async createLinkJob(input) {
+      const [row] = await db
+        .insert(jobs)
+        .values({ ...input, provider: LINK_PROVIDER, postedAt: null })
+        .onConflictDoNothing({ target: [jobs.provider, jobs.board, jobs.externalId] })
+        .returning();
+      if (row) return row;
+      const existing = await findBySource(LINK_PROVIDER, input.board, input.externalId);
+      if (!existing) throw new Error('Link job vanished after insert conflict');
+      return existing;
+    },
+
+    async rename(id, title, company) {
+      await db
+        .update(jobs)
+        .set(company ? { title, company } : { title })
+        .where(eq(jobs.id, id));
+    },
 
     async lastSyncedAt() {
       const [row] = await db.select({ at: max(jobs.lastSeenAt) }).from(jobs);
@@ -95,20 +167,35 @@ export function createUserJobRepository(db: Db): UserJobRepository {
       return new Map(rows.map((r) => [r.jobId, r.status]));
     },
 
-    async getStatus(userId, jobId) {
+    async get(userId, jobId) {
       const row = await db.query.userJobs.findFirst({
         where: and(eq(userJobs.userId, userId), eq(userJobs.jobId, jobId)),
       });
-      return row?.status;
+      return row ? { status: row.status, stage: row.stage } : undefined;
     },
 
     async setStatus(userId, jobId, status) {
+      const applied = status === 'applied';
       await db
         .insert(userJobs)
-        .values({ userId, jobId, status })
+        .values({ userId, jobId, status, stage: applied ? 'applied' : null })
         .onConflictDoUpdate({
           target: [userJobs.userId, userJobs.jobId],
-          set: { status, updatedAt: new Date() },
+          set: {
+            status,
+            stage: applied ? sql`coalesce(${userJobs.stage}, 'applied')` : null,
+            updatedAt: new Date(),
+          },
+        });
+    },
+
+    async setStage(userId, jobId, stage) {
+      await db
+        .insert(userJobs)
+        .values({ userId, jobId, status: 'applied', stage })
+        .onConflictDoUpdate({
+          target: [userJobs.userId, userJobs.jobId],
+          set: { status: 'applied', stage, updatedAt: new Date() },
         });
     },
 
@@ -116,15 +203,18 @@ export function createUserJobRepository(db: Db): UserJobRepository {
       await db.delete(userJobs).where(and(eq(userJobs.userId, userId), eq(userJobs.jobId, jobId)));
     },
 
-    async list(userId, status, limit) {
-      const rows = await db
-        .select({ job: jobs })
+    list(userId, status, limit) {
+      const noteCount = sql<number>`(
+        select count(*)::int from ${jobNotes}
+        where ${jobNotes.userId} = ${userJobs.userId} and ${jobNotes.jobId} = ${userJobs.jobId}
+      )`;
+      return db
+        .select({ job: jobs, stage: userJobs.stage, noteCount })
         .from(userJobs)
         .innerJoin(jobs, eq(userJobs.jobId, jobs.id))
         .where(and(eq(userJobs.userId, userId), eq(userJobs.status, status)))
         .orderBy(desc(userJobs.updatedAt))
         .limit(limit);
-      return rows.map((r) => r.job);
     },
 
     async count(userId, status) {

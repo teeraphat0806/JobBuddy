@@ -126,6 +126,16 @@ export type NewJob = typeof jobs.$inferInsert;
 
 export const userJobStatus = pgEnum('user_job_status', ['saved', 'applied', 'hidden']);
 
+/** Where an application stands; only meaningful while status = 'applied'. */
+export const applicationStage = pgEnum('application_stage', [
+  'applied',
+  'contacted',
+  'interview',
+  'waiting',
+  'offer',
+  'rejected',
+]);
+
 /** A user's relationship with a job: saved for later, applied, or hidden from the feed. */
 export const userJobs = pgTable(
   'user_jobs',
@@ -137,6 +147,7 @@ export const userJobs = pgTable(
       .notNull()
       .references(() => jobs.id, { onDelete: 'cascade' }),
     status: userJobStatus('status').notNull(),
+    stage: applicationStage('stage'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .notNull()
@@ -145,3 +156,24 @@ export const userJobs = pgTable(
   },
   (t) => [primaryKey({ columns: [t.userId, t.jobId] })],
 );
+
+export type UserJob = typeof userJobs.$inferSelect;
+
+/** Free-text notes a user keeps about a job (interview prep, contacts, salary talk...). */
+export const jobNotes = pgTable(
+  'job_notes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    jobId: uuid('job_id')
+      .notNull()
+      .references(() => jobs.id, { onDelete: 'cascade' }),
+    body: text('body').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('job_notes_user_job_idx').on(t.userId, t.jobId)],
+);
+
+export type JobNote = typeof jobNotes.$inferSelect;

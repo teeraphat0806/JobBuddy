@@ -3,7 +3,15 @@ import type { webhook } from '@line/bot-sdk';
 import { vi } from 'vitest';
 import type { SessionRepository } from '../src/conversation/repository.js';
 import type { Job, User } from '../src/db/schema.js';
-import type { JobRepository, UserJobRepository, UserJobStatus } from '../src/jobs/repository.js';
+import {
+  LINK_PROVIDER,
+  type ApplicationStage,
+  type JobRepository,
+  type UserJobRepository,
+  type UserJobStatus,
+} from '../src/jobs/repository.js';
+import type { LinkPreview } from '../src/links/preview.js';
+import type { NoteRepository } from '../src/notes/repository.js';
 import { createEventsHandler } from '../src/line/handlers.js';
 import type { LineMessenger, OutgoingMessage } from '../src/line/messenger.js';
 import { encodePostback, type PostbackData } from '../src/line/postback.js';
@@ -81,7 +89,11 @@ export function createFakeBot() {
   };
 
   const jobRows = new Map<string, Job>();
-  const userJobRows = new Map<string, { status: UserJobStatus; at: number }>();
+  const userJobRows = new Map<
+    string,
+    { status: UserJobStatus; stage: ApplicationStage | null; at: number }
+  >();
+  const noteRows: { userId: string; jobId: string; body: string; at: number }[] = [];
   const ujKey = (userId: string, jobId: string) => `${userId}:${jobId}`;
   let tick = 0;
 
@@ -90,8 +102,24 @@ export function createFakeBot() {
     async deactivateMissing() {
       return 0;
     },
-    listActive: async () => [...jobRows.values()].filter((j) => j.active),
+    listActive: async () =>
+      [...jobRows.values()].filter((j) => j.active && j.provider !== LINK_PROVIDER),
     getById: async (id) => jobRows.get(id),
+    findByUrl: async (url) => [...jobRows.values()].find((j) => j.url === url),
+    findBySource: async (provider, board, externalId) =>
+      [...jobRows.values()].find(
+        (j) => j.provider === provider && j.board === board && j.externalId === externalId,
+      ),
+    async createLinkJob(input) {
+      const existing = await jobs.findBySource(LINK_PROVIDER, input.board, input.externalId);
+      if (existing) return existing;
+      const id = addJob({ ...input, provider: LINK_PROVIDER, postedAt: null });
+      return jobRows.get(id)!;
+    },
+    async rename(id, title, company) {
+      const j = jobRows.get(id);
+      if (j) Object.assign(j, company ? { title, company } : { title });
+    },
     lastSyncedAt: async () => null,
   };
 
@@ -102,16 +130,31 @@ export function createFakeBot() {
         if (k.startsWith(`${userId}:`)) out.set(k.split(':')[1]!, v.status);
       return out;
     },
-    getStatus: async (userId, jobId) => userJobRows.get(ujKey(userId, jobId))?.status,
-    setStatus: async (userId, jobId, status) =>
-      void userJobRows.set(ujKey(userId, jobId), { status, at: ++tick }),
+    async get(userId, jobId) {
+      const r = userJobRows.get(ujKey(userId, jobId));
+      return r ? { status: r.status, stage: r.stage } : undefined;
+    },
+    async setStatus(userId, jobId, status) {
+      const prev = userJobRows.get(ujKey(userId, jobId));
+      const stage = status === 'applied' ? (prev?.stage ?? 'applied') : null;
+      userJobRows.set(ujKey(userId, jobId), { status, stage, at: ++tick });
+    },
+    setStage: async (userId, jobId, stage) =>
+      void userJobRows.set(ujKey(userId, jobId), { status: 'applied', stage, at: ++tick }),
     clear: async (userId, jobId) => void userJobRows.delete(ujKey(userId, jobId)),
     async list(userId, status, limit) {
       return [...userJobRows.entries()]
         .filter(([k, v]) => k.startsWith(`${userId}:`) && v.status === status)
         .sort((a, b) => b[1].at - a[1].at)
         .slice(0, limit)
-        .map(([k]) => jobRows.get(k.split(':')[1]!)!);
+        .map(([k, v]) => {
+          const jobId = k.split(':')[1]!;
+          return {
+            job: jobRows.get(jobId)!,
+            stage: v.stage,
+            noteCount: noteRows.filter((n) => n.userId === userId && n.jobId === jobId).length,
+          };
+        });
     },
     async count(userId, status) {
       return [...userJobRows.entries()].filter(
@@ -143,6 +186,27 @@ export function createFakeBot() {
     return job.id;
   }
 
+  const notes: NoteRepository = {
+    add: async (userId, jobId, body) => void noteRows.push({ userId, jobId, body, at: ++tick }),
+    list: async (userId, jobId, limit) =>
+      noteRows
+        .filter((n) => n.userId === userId && n.jobId === jobId)
+        .sort((a, b) => b.at - a.at)
+        .slice(0, limit)
+        .map((n, i) => ({ id: `n${i}`, ...n, createdAt: new Date(n.at * 60_000) })),
+    count: async (userId, jobId) =>
+      noteRows.filter((n) => n.userId === userId && n.jobId === jobId).length,
+  };
+
+  /** What the fake link previewer returns; tests overwrite it. */
+  const linkPreview: { next: Omit<LinkPreview, 'url'> } = {
+    next: { title: null, company: null, location: '', department: null, workplace: null },
+  };
+  const previewLink = vi.fn(async (url: string): Promise<LinkPreview> => ({
+    url,
+    ...linkPreview.next,
+  }));
+
   const replies: OutgoingMessage[][] = [];
   const line = {
     reply: vi.fn(async (_token: string, messages: OutgoingMessage[]) => {
@@ -159,6 +223,8 @@ export function createFakeBot() {
     sessions,
     jobs,
     userJobs,
+    notes,
+    previewLink,
     line,
     logger: silentLogger,
     getAddFriendUrl: () => 'https://line.me/R/ti/p/%40jobbuddy',
@@ -189,6 +255,9 @@ export function createFakeBot() {
     sessionsByUser,
     jobRows,
     userJobRows,
+    noteRows,
+    linkPreview,
+    previewLink,
     addJob,
     line,
     handle,

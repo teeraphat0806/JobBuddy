@@ -148,6 +148,12 @@ describe('runJobSync', () => {
       deactivateMissing: vi.fn(async () => 2),
       listActive: vi.fn(async () => []),
       getById: vi.fn(async () => undefined),
+      findByUrl: vi.fn(async () => undefined),
+      findBySource: vi.fn(async () => undefined),
+      createLinkJob: vi.fn(async () => {
+        throw new Error('unused');
+      }),
+      rename: vi.fn(async () => {}),
       lastSyncedAt: vi.fn(async () => null),
     } satisfies JobRepository;
   }

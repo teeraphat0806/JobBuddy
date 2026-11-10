@@ -94,7 +94,7 @@ export function createJobActions(deps: JobActionDeps) {
     return [
       text(`${title} ${total} งาน${more}`),
       jobCarousel(
-        items.map((job) => ({ job })),
+        items.map(({ job, stage, noteCount }) => ({ job: { ...job, stage, noteCount } })),
         status,
         { altText: `${title} ${total} งาน`, addFriendUrl: deps.getAddFriendUrl?.() },
       ),
@@ -104,7 +104,7 @@ export function createJobActions(deps: JobActionDeps) {
   async function act(user: User, action: string, jobId: string): Promise<OutgoingMessage[]> {
     const job = await jobs.getById(jobId);
     if (!job) return [text('ไม่พบงานนี้แล้วครับ อาจถูกลบออกจากระบบ')];
-    const current = await userJobs.getStatus(user.id, job.id);
+    const current = (await userJobs.get(user.id, job.id))?.status;
     const name = `${job.title} @ ${job.company}`;
 
     const set = (s: UserJobStatus) => userJobs.setStatus(user.id, job.id, s);

@@ -8,10 +8,10 @@ import type { JobListing, JobSource, Workplace } from './types.js';
  */
 export type Fetch = typeof fetch;
 
-const USER_AGENT = 'JobBuddy/0.1 (+https://github.com/teeraphat0806/JobBuddy)';
+export const USER_AGENT = 'JobBuddy/0.1 (+https://github.com/teeraphat0806/JobBuddy)';
 const TIMEOUT_MS = 20_000;
 
-async function getJson(fetchImpl: Fetch, url: string): Promise<unknown> {
+export async function getJson(fetchImpl: Fetch, url: string): Promise<unknown> {
   const res = await fetchImpl(url, {
     headers: { 'user-agent': USER_AGENT, accept: 'application/json' },
     signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -20,7 +20,8 @@ async function getJson(fetchImpl: Fetch, url: string): Promise<unknown> {
   return res.json();
 }
 
-const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
+export const str = (v: unknown): string | null =>
+  typeof v === 'string' && v.trim() ? v.trim() : null;
 const date = (v: unknown): Date | null => {
   if (typeof v !== 'string' && typeof v !== 'number') return null;
   const d = new Date(v);
@@ -76,7 +77,7 @@ interface LeverJob {
   categories?: { location?: string; allLocations?: string[]; team?: string; department?: string };
 }
 
-const LEVER_WORKPLACE: Record<string, Workplace> = {
+export const LEVER_WORKPLACE: Record<string, Workplace> = {
   onsite: 'onsite',
   'on-site': 'onsite',
   hybrid: 'hybrid',
