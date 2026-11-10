@@ -1,0 +1,90 @@
+-- JobBuddy: สร้างตารางทั้งหมดด้วยมือ (ใช้กับ DB ว่าง)
+-- รวม drizzle/*.sql และบันทึก journal ให้ migrate ตอน start รู้ว่ารันแล้ว
+BEGIN;
+
+-- 0000_init
+CREATE TYPE "public"."user_status" AS ENUM('active', 'unfollowed');
+CREATE TABLE "users" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"line_user_id" text NOT NULL,
+	"display_name" text,
+	"picture_url" text,
+	"language" text,
+	"status" "user_status" DEFAULT 'active' NOT NULL,
+	"notify_interview_reminders" boolean DEFAULT true NOT NULL,
+	"pdpa_consented_at" timestamp with time zone,
+	"followed_at" timestamp with time zone,
+	"unfollowed_at" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "users_line_user_id_unique" UNIQUE("line_user_id")
+);
+
+-- 0001_preferences_and_sessions
+CREATE TYPE "public"."work_mode" AS ENUM('any', 'onsite', 'hybrid', 'remote');
+CREATE TABLE "conversation_sessions" (
+	"user_id" uuid PRIMARY KEY NOT NULL,
+	"flow" text NOT NULL,
+	"state" jsonb NOT NULL,
+	"expires_at" timestamp with time zone NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+CREATE TABLE "job_preferences" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"user_id" uuid NOT NULL,
+	"positions" text[] NOT NULL,
+	"locations" text[] DEFAULT '{}'::text[] NOT NULL,
+	"work_mode" "work_mode" DEFAULT 'any' NOT NULL,
+	"min_salary" integer,
+	"excluded_keywords" text[] DEFAULT '{}'::text[] NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "job_preferences_user_id_unique" UNIQUE("user_id")
+);
+ALTER TABLE "conversation_sessions" ADD CONSTRAINT "conversation_sessions_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "job_preferences" ADD CONSTRAINT "job_preferences_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+
+-- 0002_jobs
+CREATE TYPE "public"."job_workplace" AS ENUM('onsite', 'hybrid', 'remote');
+CREATE TYPE "public"."user_job_status" AS ENUM('saved', 'applied', 'hidden');
+CREATE TABLE "jobs" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"provider" text NOT NULL,
+	"board" text NOT NULL,
+	"external_id" text NOT NULL,
+	"company" text NOT NULL,
+	"title" text NOT NULL,
+	"location" text NOT NULL,
+	"department" text,
+	"workplace" "job_workplace",
+	"url" text NOT NULL,
+	"posted_at" timestamp with time zone,
+	"first_seen_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"last_seen_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"active" boolean DEFAULT true NOT NULL
+);
+CREATE TABLE "user_jobs" (
+	"user_id" uuid NOT NULL,
+	"job_id" uuid NOT NULL,
+	"status" "user_job_status" NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "user_jobs_user_id_job_id_pk" PRIMARY KEY("user_id","job_id")
+);
+ALTER TABLE "user_jobs" ADD CONSTRAINT "user_jobs_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "user_jobs" ADD CONSTRAINT "user_jobs_job_id_jobs_id_fk" FOREIGN KEY ("job_id") REFERENCES "public"."jobs"("id") ON DELETE cascade ON UPDATE no action;
+CREATE UNIQUE INDEX "jobs_source_unique" ON "jobs" USING btree ("provider","board","external_id");
+CREATE INDEX "jobs_active_idx" ON "jobs" USING btree ("active");
+
+CREATE SCHEMA IF NOT EXISTS drizzle;
+CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
+  id SERIAL PRIMARY KEY,
+  hash text NOT NULL,
+  created_at bigint
+);
+INSERT INTO drizzle.__drizzle_migrations (hash, created_at) VALUES
+  ('be2479f4dd45266a77c2b6c28934fb3aa0be59853ed9f2bdecdc148a626a9a17', 1794279984730),
+  ('c5fa00ff59f54efe3bb09e5ec546b26aa056ad802a977e0b9998a67064a82f07', 1794283471695),
+  ('cffb8dccdb5e66548c9d0c29b312271cb822135eed80658d2171d02d412ce51e', 1794284280351);
+
+COMMIT;
