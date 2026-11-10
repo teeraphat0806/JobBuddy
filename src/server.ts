@@ -1,9 +1,9 @@
 import { serve } from '@hono/node-server';
-import { sql as rawSql } from 'drizzle-orm';
 import { createApp } from './app.js';
 import { loadEnv } from './config/env.js';
 import { createSessionRepository } from './conversation/repository.js';
 import { createDb } from './db/client.js';
+import { missingTables } from './db/verify.js';
 import { createJobRepository, createUserJobRepository } from './jobs/repository.js';
 import { JOB_SOURCES } from './jobs/sources.js';
 import { startJobSyncScheduler } from './jobs/sync.js';
@@ -41,7 +41,9 @@ const app = createApp({
     getAddFriendUrl: () => addFriendUrl,
   }),
   checkDatabase: async () => {
-    await db.execute(rawSql`select 1`);
+    // Also proves the schema exists: a reachable but empty database is just as broken.
+    const missing = await missingTables(db);
+    if (missing.length > 0) throw new Error(`Missing tables: ${missing.join(', ')}`);
   },
   logger,
 });

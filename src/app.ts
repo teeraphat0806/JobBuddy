@@ -19,7 +19,7 @@ export function createApp(deps: AppDeps) {
       return c.json({ status: 'ok' });
     } catch (err) {
       deps.logger.error('Health check failed', errorFields(err));
-      return c.json({ status: 'error', database: 'unreachable' }, 503);
+      return c.json({ status: 'error', database: 'unavailable' }, 503);
     }
   });
 

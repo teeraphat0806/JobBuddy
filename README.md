@@ -119,3 +119,19 @@ npm run dev                   # http://localhost:3000
 `railway.json` กำหนดให้รัน migration ก่อน deploy ทุกครั้ง และใช้ `/health` เป็น healthcheck
 
 ค่าลับทั้งหมด (LINE channel secret/token, DATABASE_URL, API keys) เก็บใน environment variables เท่านั้น — ห้าม commit ลง repo
+
+### Database has no tables (migrate ผ่านแต่ไม่มีตาราง)
+
+Drizzle จำว่า migration ไหนรันแล้วไว้ใน `drizzle.__drizzle_migrations` ถ้าตารางใน `public` หายไป
+แต่ journal ยังอยู่ `migrate` จะข้ามทุกไฟล์ ตอนนี้ `npm run db:migrate` จะ fail พร้อมข้อความ
+`Migrations ran but required tables are missing` และ `/health` จะตอบ 503
+
+วิธีแก้ (**ลบข้อมูลทั้งหมดใน DB** — ใช้เมื่อ `public` ว่างหรือไม่มีข้อมูลที่ต้องเก็บ):
+
+```sql
+DROP SCHEMA IF EXISTS drizzle CASCADE;
+DROP SCHEMA public CASCADE;   -- enum types ค้างอยู่แม้ตารางหายแล้ว
+CREATE SCHEMA public;
+```
+
+จากนั้น Redeploy — pre-deploy จะสร้างตารางใหม่ทั้งหมด
