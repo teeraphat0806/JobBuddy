@@ -175,6 +175,58 @@ export async function fetchSmartRecruiters(
   return out;
 }
 
+// ---- Workable: GET apply.workable.com/api/v1/widget/accounts/{board} (public careers widget)
+
+interface WorkableJob {
+  title?: string;
+  shortcode?: string;
+  department?: string;
+  telecommuting?: boolean;
+  url?: string;
+  shortlink?: string;
+  published_on?: string;
+  created_at?: string;
+  country?: string;
+  city?: string;
+  state?: string;
+  locations?: { country?: string; countryCode?: string; city?: string; region?: string }[];
+}
+
+export async function fetchWorkable(source: JobSource, fetchImpl: Fetch): Promise<JobListing[]> {
+  const body = (await getJson(
+    fetchImpl,
+    `https://apply.workable.com/api/v1/widget/accounts/${encodeURIComponent(source.board)}`,
+  )) as { name?: string; jobs?: WorkableJob[] };
+  return (body.jobs ?? []).flatMap((j) => {
+    const places = j.locations?.length
+      ? j.locations
+      : [{ country: j.country, city: j.city, region: j.state }];
+    const thai = places.find(
+      (p) =>
+        p.countryCode?.toUpperCase() === 'TH' || isInThailand(`${p.city ?? ''} ${p.country ?? ''}`),
+    );
+    const url = str(j.url) ?? str(j.shortlink);
+    if (!thai || !str(j.title) || !str(j.shortcode) || !url) return [];
+    const location = cleanLocation(
+      [thai.city, thai.region, thai.country ?? 'Thailand'].filter(Boolean).join(', '),
+    );
+    return [
+      {
+        provider: 'workable' as const,
+        board: source.board,
+        externalId: j.shortcode!,
+        company: str(body.name) ?? source.company,
+        title: j.title!.trim(),
+        location: location || 'Thailand',
+        department: str(j.department),
+        workplace: j.telecommuting ? 'remote' : workplaceFromText(location),
+        url,
+        postedAt: date(j.published_on) ?? date(j.created_at),
+      },
+    ];
+  });
+}
+
 export function fetchSource(source: JobSource, fetchImpl: Fetch = fetch): Promise<JobListing[]> {
   switch (source.provider) {
     case 'greenhouse':
@@ -183,5 +235,7 @@ export function fetchSource(source: JobSource, fetchImpl: Fetch = fetch): Promis
       return fetchLever(source, fetchImpl);
     case 'smartrecruiters':
       return fetchSmartRecruiters(source, fetchImpl);
+    case 'workable':
+      return fetchWorkable(source, fetchImpl);
   }
 }

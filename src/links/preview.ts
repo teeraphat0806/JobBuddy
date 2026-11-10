@@ -75,6 +75,10 @@ export function atsRefOf(rawUrl: string): AtsRef | null {
       return { provider: 'greenhouse', board: parts[0]!, id: parts[2]! };
     }
   }
+  // apply.workable.com/{account}/j/{shortcode}/
+  if (host === 'apply.workable.com' && parts.length >= 3 && parts[1] === 'j') {
+    return { provider: 'workable', board: parts[0]!, id: parts[2]! };
+  }
   if (host === 'jobs.lever.co' && parts.length >= 2 && /^[0-9a-f-]{36}$/i.test(parts[1]!)) {
     return { provider: 'lever', board: parts[0]!, id: parts[1]! };
   }
@@ -142,6 +146,32 @@ async function fetchAtsDetails(ref: AtsRef, fetchImpl: Fetch): Promise<AtsDetail
         location: cleanLocation(loc.fullLocation ?? loc.city ?? ''),
         department: str(j.department?.label),
         workplace: loc.remote ? 'remote' : loc.hybrid ? 'hybrid' : null,
+      };
+    }
+    case 'workable': {
+      // The public widget lists every open job; pick the one the link points at.
+      const body = (await getJson(
+        fetchImpl,
+        `https://apply.workable.com/api/v1/widget/accounts/${b}`,
+      )) as {
+        name?: string;
+        jobs?: {
+          shortcode?: string;
+          title?: string;
+          department?: string;
+          telecommuting?: boolean;
+          city?: string;
+          country?: string;
+        }[];
+      };
+      const j = body.jobs?.find((x) => x.shortcode === ref.id);
+      const location = cleanLocation([j?.city, j?.country].filter(Boolean).join(', '));
+      return {
+        title: str(j?.title),
+        company: str(body.name),
+        location,
+        department: str(j?.department),
+        workplace: j?.telecommuting ? 'remote' : workplaceFromText(location),
       };
     }
   }

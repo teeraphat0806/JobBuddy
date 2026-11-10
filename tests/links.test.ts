@@ -53,6 +53,14 @@ describe('atsRefOf', () => {
   ])('%s', (url, ref) => {
     expect(atsRefOf(url)).toEqual(ref);
   });
+  it('recognises Workable postings', () => {
+    expect(atsRefOf('https://apply.workable.com/2c2p/j/ABC123/')).toEqual({
+      provider: 'workable',
+      board: '2c2p',
+      id: 'ABC123',
+    });
+  });
+
   it('returns null for other sites', () => {
     expect(atsRefOf('https://www.jobsdb.com/th/job/123')).toBeNull();
   });

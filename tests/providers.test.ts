@@ -3,6 +3,7 @@ import {
   fetchGreenhouse,
   fetchLever,
   fetchSmartRecruiters,
+  fetchWorkable,
   type Fetch,
 } from '../src/jobs/providers.js';
 import { runJobSync } from '../src/jobs/sync.js';
@@ -138,6 +139,56 @@ describe('fetchSmartRecruiters', () => {
       department: 'Engineering',
     });
     expect(jobs[1]!.workplace).toBe('onsite');
+  });
+});
+
+describe('fetchWorkable', () => {
+  it('keeps jobs with a Thai location and links to the posting', async () => {
+    const f = fakeFetch({
+      'widget/accounts/acme': {
+        name: 'Acme Pay',
+        jobs: [
+          {
+            title: 'QA Engineer',
+            shortcode: 'ABC123',
+            department: 'Engineering',
+            telecommuting: false,
+            url: 'https://apply.workable.com/j/ABC123',
+            published_on: '2026-11-02',
+            city: 'Bangkok',
+            country: 'Thailand',
+            locations: [{ country: 'Thailand', countryCode: 'TH', city: 'Bangkok', region: '' }],
+          },
+          {
+            title: 'Remote Dev',
+            shortcode: 'R1',
+            telecommuting: true,
+            url: 'https://apply.workable.com/j/R1',
+            locations: [
+              { country: 'Singapore', countryCode: 'SG', city: 'Singapore' },
+              { country: 'Thailand', countryCode: 'TH', city: '' },
+            ],
+          },
+          {
+            title: 'Jakarta only',
+            shortcode: 'ID1',
+            url: 'https://apply.workable.com/j/ID1',
+            locations: [{ country: 'Indonesia', countryCode: 'ID', city: 'Jakarta' }],
+          },
+        ],
+      },
+    });
+    const jobs = await fetchWorkable({ provider: 'workable', board: 'acme', company: 'Acme' }, f);
+    expect(jobs.map((j) => j.externalId)).toEqual(['ABC123', 'R1']);
+    expect(jobs[0]).toMatchObject({
+      provider: 'workable',
+      company: 'Acme Pay',
+      title: 'QA Engineer',
+      location: 'Bangkok, Thailand',
+      department: 'Engineering',
+      url: 'https://apply.workable.com/j/ABC123',
+    });
+    expect(jobs[1]).toMatchObject({ workplace: 'remote', location: 'Thailand' });
   });
 });
 

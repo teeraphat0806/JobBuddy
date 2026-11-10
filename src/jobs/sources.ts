@@ -12,6 +12,8 @@ export const JOB_SOURCES: JobSource[] = [
   { provider: 'greenhouse', board: 'airbnb', company: 'Airbnb' },
   { provider: 'greenhouse', board: 'okx', company: 'OKX' },
   { provider: 'greenhouse', board: 'stripe', company: 'Stripe' },
+  { provider: 'greenhouse', board: 'sertis', company: 'Sertis' },
+  { provider: 'greenhouse', board: 'thoughtworks', company: 'Thoughtworks' },
   // Lever
   { provider: 'lever', board: 'lalamove', company: 'Lalamove' },
   { provider: 'lever', board: 'ninjavan', company: 'Ninja Van' },
@@ -23,4 +25,11 @@ export const JOB_SOURCES: JobSource[] = [
   { provider: 'smartrecruiters', board: 'Accor', company: 'Accor' },
   { provider: 'smartrecruiters', board: 'Abbvie', company: 'AbbVie' },
   { provider: 'smartrecruiters', board: 'MinorInternational', company: 'Minor International' },
+  { provider: 'smartrecruiters', board: 'westerndigital', company: 'Western Digital' },
+  { provider: 'smartrecruiters', board: 'deliveryhero', company: 'Delivery Hero' },
+  { provider: 'smartrecruiters', board: 'wise', company: 'Wise' },
+  { provider: 'smartrecruiters', board: 'seek', company: 'SEEK' },
+  // Workable (rate-limited by Cloudflare: one request per board per sync is fine)
+  { provider: 'workable', board: '2c2p', company: '2C2P' },
+  { provider: 'workable', board: 'fundingsocieties', company: 'Funding Societies' },
 ];
