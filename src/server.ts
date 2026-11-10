@@ -3,6 +3,7 @@ import { createApp } from './app.js';
 import { loadEnv } from './config/env.js';
 import { createSessionRepository } from './conversation/repository.js';
 import { createDb } from './db/client.js';
+import { runMigrations } from './db/runMigrations.js';
 import { missingTables } from './db/verify.js';
 import { createJobRepository, createUserJobRepository } from './jobs/repository.js';
 import { JOB_SOURCES } from './jobs/sources.js';
@@ -15,6 +16,16 @@ import { createPrefsRepository } from './prefs/repository.js';
 import { createUserRepository } from './users/repository.js';
 
 const env = loadEnv();
+
+// Also migrate here, not only in Railway's pre-deploy step: it's idempotent, and the bot can't
+// work without its tables, so refuse to start (and fail the deploy) rather than run broken.
+try {
+  await runMigrations(env.DATABASE_URL, logger);
+} catch (err) {
+  logger.error('Migration failed; not starting', errorFields(err));
+  process.exit(1);
+}
+
 const { db, sql } = createDb(env.DATABASE_URL);
 const line = createLineMessenger(env.LINE_CHANNEL_ACCESS_TOKEN);
 const jobs = createJobRepository(db);
