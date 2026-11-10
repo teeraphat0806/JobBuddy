@@ -2,7 +2,7 @@ import type { messagingApi } from '@line/bot-sdk';
 import type { ApplicationStage } from '../jobs/repository.js';
 import type { Workplace } from '../jobs/types.js';
 import type { OutgoingMessage } from './messenger.js';
-import { encodePostback } from './postback.js';
+import { encodePostback, type PostbackData } from './postback.js';
 import { STAGE_LABEL } from './stages.js';
 
 export interface CardJob {
@@ -188,7 +188,7 @@ export function jobBubble(
   };
 }
 
-function moreBubble(nextPage: number): messagingApi.FlexBubble {
+function moreBubble(more: PostbackData): messagingApi.FlexBubble {
   return {
     type: 'bubble',
     size: 'kilo',
@@ -206,7 +206,7 @@ function moreBubble(nextPage: number): messagingApi.FlexBubble {
           action: {
             type: 'postback',
             label: 'ดูเพิ่ม',
-            data: encodePostback({ a: 'feed', p: String(nextPage) }),
+            data: encodePostback(more),
             displayText: 'ดูงานเพิ่ม',
           },
         },
@@ -218,13 +218,14 @@ function moreBubble(nextPage: number): messagingApi.FlexBubble {
 export function jobCarousel(
   items: { job: CardJob; isNew?: boolean }[],
   variant: CardVariant,
-  opts: { altText: string; nextPage?: number; addFriendUrl?: string },
+  /** `more`: postback for a trailing "ดูเพิ่ม" bubble (next page). */
+  opts: { altText: string; more?: PostbackData; addFriendUrl?: string },
 ): OutgoingMessage {
   // A carousel holds at most 12 bubbles.
   const bubbles = items
-    .slice(0, opts.nextPage ? 11 : 12)
+    .slice(0, opts.more ? 11 : 12)
     .map(({ job, isNew }) => jobBubble(job, variant, { isNew, addFriendUrl: opts.addFriendUrl }));
-  if (opts.nextPage) bubbles.push(moreBubble(opts.nextPage));
+  if (opts.more) bubbles.push(moreBubble(opts.more));
   return {
     type: 'flex',
     altText: opts.altText,

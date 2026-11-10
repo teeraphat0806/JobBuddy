@@ -147,11 +147,11 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
     setStage: async (userId, jobId, stage) =>
       void userJobRows.set(ujKey(userId, jobId), { status: 'applied', stage, at: ++tick }),
     clear: async (userId, jobId) => void userJobRows.delete(ujKey(userId, jobId)),
-    async list(userId, status, limit) {
+    async list(userId, status, limit, offset = 0) {
       return [...userJobRows.entries()]
         .filter(([k, v]) => k.startsWith(`${userId}:`) && v.status === status)
         .sort((a, b) => b[1].at - a[1].at)
-        .slice(0, limit)
+        .slice(offset, offset + limit)
         .map(([k, v]) => {
           const jobId = k.split(':')[1]!;
           return {
@@ -160,6 +160,11 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
             noteCount: noteRows.filter((n) => n.userId === userId && n.jobId === jobId).length,
           };
         });
+    },
+    async otherTrackers(userId, jobId) {
+      return [...userJobRows.keys()].filter(
+        (k) => k.endsWith(`:${jobId}`) && !k.startsWith(`${userId}:`),
+      ).length;
     },
     async count(userId, status) {
       return [...userJobRows.entries()].filter(

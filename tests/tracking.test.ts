@@ -55,7 +55,7 @@ describe('adding a job by link', () => {
     expect(job).toMatchObject({ title: 'Data Analyst', company: 'Acme Careers' });
     expect(bot.userJobRows.get(`${userId(bot)}:${job.id}`)?.status).toBe('saved');
     // Link jobs are private to whoever saved them: never in the shared feed.
-    expect(await bot.tap({ a: 'menu', m: 'saved' })).toEqual([
+    expect(await bot.tap({ a: 'list', s: 'saved', v: 'card', p: '1' })).toEqual([
       expect.stringContaining('1 งาน'),
       '[flex]',
     ]);
@@ -156,7 +156,7 @@ describe('notes', () => {
     const id = bot.addJob({ title: 'QA' });
     await bot.tap({ a: 'job', v: 'note', j: id });
     await bot.say('one');
-    await bot.tap({ a: 'menu', m: 'saved' });
+    await bot.tap({ a: 'list', s: 'saved', v: 'card', p: '1' });
     expect(bubbleOf(bot)).toContain('📝 โน้ต (1)');
   });
 });
@@ -167,7 +167,7 @@ describe('application stages', () => {
     const id = bot.addJob({ title: 'QA' });
     await bot.tap({ a: 'job', v: 'apply', j: id });
     expect(bot.userJobRows.get(`${userId(bot)}:${id}`)?.stage).toBe('applied');
-    await bot.tap({ a: 'menu', m: 'applied' });
+    await bot.tap({ a: 'list', s: 'applied', v: 'card', p: '1' });
     expect(bubbleOf(bot)).toContain('สถานะ: ✅ สมัครแล้ว');
     expect(bubbleOf(bot)).toContain('🔄 อัปเดตสถานะ');
   });

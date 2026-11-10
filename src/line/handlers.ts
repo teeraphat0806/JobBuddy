@@ -4,7 +4,7 @@ import type { User } from '../db/schema.js';
 import { errorFields, httpStatusOf, type Logger } from '../lib/logger.js';
 import type { InterviewRepository } from '../interviews/repository.js';
 import type { JobRepository, UserJobRepository } from '../jobs/repository.js';
-import { extractUrl, type LinkPreviewer } from '../links/preview.js';
+import { extractUrl, extractUrls, type LinkPreviewer } from '../links/preview.js';
 import type { NoteRepository } from '../notes/repository.js';
 import type { PrefsRepository } from '../prefs/repository.js';
 import {
@@ -164,6 +164,16 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
       const page = Number.parseInt(pb.p ?? '1', 10);
       return showFeed(user, Number.isFinite(page) && page > 0 ? page : 1);
     }
+    if (pb?.a === 'list' && (pb.s === 'saved' || pb.s === 'applied')) {
+      await sessions.clear(user.id);
+      const page = Number.parseInt(pb.p ?? '1', 10);
+      return jobActions.list(
+        user,
+        pb.s,
+        pb.v === 'card' ? 'card' : 'list',
+        Number.isFinite(page) ? page : 1,
+      );
+    }
     if (pb?.a === 'job' && pb.v && pb.j) {
       await sessions.clear(user.id); // e.g. abandon a half-typed note
       switch (pb.v) {
@@ -181,7 +191,11 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
       await sessions.clear(user.id);
       return tracking.setStage(user, pb.j, pb.v);
     }
-    if (pb?.a === 'title') return tracking.skipTitle(user);
+    if (pb?.a === 'title') {
+      await sessions.clear(user.id);
+      if (pb.v === 'edit' && pb.j) return tracking.askTitle(user, pb.j);
+      return tracking.skipTitle(user);
+    }
     if (pb?.a === 'iv') {
       await sessions.clear(user.id);
       if (pb.v === 'new' && pb.j) return interviewFlows.create(user, pb.j, pb.dt);
@@ -218,8 +232,9 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
         return tracking.nameJob(user, flow.jobId, typed);
       }
     }
-    const link = typed !== undefined ? extractUrl(typed) : null;
-    if (link) return tracking.addLink(user, link);
+    const links = typed !== undefined ? extractUrls(typed) : [];
+    if (links.length === 1) return tracking.addLink(user, links[0]!);
+    if (links.length > 1) return tracking.addLinks(user, links);
 
     const wizard = session?.flow === WIZARD_FLOW ? asWizardState(session.state) : null;
     if (wizard) {

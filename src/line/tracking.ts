@@ -8,10 +8,10 @@ import {
 } from '../jobs/repository.js';
 import { canonicalUrl, hostLabel, type LinkPreviewer } from '../links/preview.js';
 import type { NoteRepository } from '../notes/repository.js';
-import { jobCarousel, type CardJob } from './jobCards.js';
+import { jobBubble, jobCarousel, type CardJob } from './jobCards.js';
 import type { OutgoingMessage } from './messenger.js';
 import { isStage, STAGE_LABEL, STAGES } from './stages.js';
-import { pickerButton, postbackButton, sayButton, text } from './ui.js';
+import { linkButton, pickerButton, postbackButton, sayButton, text } from './ui.js';
 
 /** Conversation flows owned by this module (stored in conversation_sessions.flow). */
 export const NOTE_FLOW = 'note';
@@ -60,6 +60,20 @@ const interviewButton = (job: Job) =>
 
 const notFound = () => [text('ไม่พบงานนี้แล้วครับ อาจถูกลบออกจากระบบ')];
 
+export const MAX_LINKS_PER_MESSAGE = 10;
+const LINK_CONCURRENCY = 4;
+const PLACEHOLDER_PREFIX = 'งานจาก ';
+const placeholderTitle = (host: string) => `${PLACEHOLDER_PREFIX}${host}`;
+const isPlaceholder = (job: Job) =>
+  job.provider === LINK_PROVIDER && job.title === placeholderTitle(job.board);
+const cannotRename = (job: Job) =>
+  text(
+    job.provider === LINK_PROVIDER
+      ? 'งานนี้มีคนอื่นบันทึกไว้ด้วย เลยแก้ชื่อไม่ได้ครับ 🙏 จดชื่อที่ต้องการไว้ในโน้ตแทนได้นะ'
+      : 'งานนี้ใช้ชื่อจากประกาศต้นทางครับ แก้ไม่ได้',
+    [],
+  );
+
 /** "Data Analyst @ SCB" / "Data Analyst at SCB" -> title + company. */
 export function parseTitleInput(input: string): { title: string; company?: string } | null {
   const trimmed = input.trim();
@@ -94,19 +108,21 @@ export function createTracking(deps: TrackingDeps) {
     });
   }
 
-  /** The user sent a link: save the job and show it as a card. */
-  async function addLink(user: User, rawUrl: string): Promise<OutgoingMessage[]> {
+  type SavedLink =
+    | { kind: 'invalid'; raw: string }
+    | {
+        kind: 'new' | 'saved' | 'applied';
+        job: Job;
+        entry: UserJobEntry;
+        needsTitle: boolean;
+      };
+
+  /** Find or create the job behind one link and make sure it's in the user's list. */
+  async function saveLink(user: User, rawUrl: string): Promise<SavedLink> {
     const url = canonicalUrl(rawUrl);
-    if (!url) {
-      return [
-        text(
-          'ลิงก์นี้ใช้ไม่ได้ครับ 😅 ต้องขึ้นต้นด้วย http:// หรือ https:// และยาวไม่เกิน 1000 ตัวอักษร',
-        ),
-      ];
-    }
+    if (!url) return { kind: 'invalid', raw: rawUrl };
 
     let job = await jobs.findByUrl(url);
-    let needsTitle = false;
     if (!job) {
       const preview = await deps.previewLink(url);
       if (preview.source) {
@@ -115,12 +131,11 @@ export function createTracking(deps: TrackingDeps) {
       }
       if (!job) {
         const host = hostLabel(url);
-        needsTitle = !preview.title;
         job = await jobs.createLinkJob({
           board: host,
           externalId: url,
           company: preview.company ?? preview.source?.board ?? host,
-          title: preview.title ?? `งานจาก ${host}`,
+          title: preview.title ?? placeholderTitle(host),
           location: preview.location,
           department: preview.department,
           workplace: preview.workplace,
@@ -128,22 +143,33 @@ export function createTracking(deps: TrackingDeps) {
         });
       }
     }
-
-    let entry = await userJobs.get(user.id, job.id);
-    let heading: string;
-    if (entry?.status === 'applied') {
-      heading = `งานนี้อยู่ใน 📋 ที่สมัครไว้ อยู่แล้วครับ\nสถานะ: ${STAGE_LABEL[entry.stage ?? 'applied']}`;
-    } else if (entry?.status === 'saved') {
-      heading = 'งานนี้อยู่ใน ⭐ ที่เก็บไว้ อยู่แล้วครับ';
-    } else {
-      await userJobs.setStatus(user.id, job.id, 'saved');
-      entry = { status: 'saved', stage: null };
-      heading =
-        '📥 บันทึกงานจากลิงก์ไว้ใน ⭐ ที่เก็บไว้ แล้วครับ\nถ้าสมัครแล้ว กด ✅ สมัครแล้ว ที่การ์ดได้เลย';
+    const needsTitle = isPlaceholder(job);
+    const entry = await userJobs.get(user.id, job.id);
+    if (entry?.status === 'applied' || entry?.status === 'saved') {
+      return { kind: entry.status, job, entry, needsTitle };
     }
+    await userJobs.setStatus(user.id, job.id, 'saved');
+    return { kind: 'new', job, entry: { status: 'saved', stage: null }, needsTitle };
+  }
+
+  const invalidLinkText =
+    'ลิงก์นี้ใช้ไม่ได้ครับ 😅 ต้องขึ้นต้นด้วย http:// หรือ https:// และยาวไม่เกิน 1000 ตัวอักษร';
+
+  /** The user sent a link: save the job and show it as a card. */
+  async function addLink(user: User, rawUrl: string): Promise<OutgoingMessage[]> {
+    const saved = await saveLink(user, rawUrl);
+    if (saved.kind === 'invalid') return [text(invalidLinkText)];
+    const { job, entry } = saved;
+
+    const heading =
+      saved.kind === 'applied'
+        ? `งานนี้อยู่ใน 📋 ที่สมัครไว้ อยู่แล้วครับ\nสถานะ: ${STAGE_LABEL[entry.stage ?? 'applied']}`
+        : saved.kind === 'saved'
+          ? 'งานนี้อยู่ใน ⭐ ที่เก็บไว้ อยู่แล้วครับ'
+          : '📥 บันทึกงานจากลิงก์ไว้ใน ⭐ ที่เก็บไว้ แล้วครับ\nถ้าสมัครแล้ว กด ✅ สมัครแล้ว ที่การ์ดได้เลย';
 
     const out = [text(heading), await card(user, job, entry)];
-    if (needsTitle && job.provider === LINK_PROVIDER) {
+    if (saved.needsTitle) {
       await sessions.set(user.id, LINK_TITLE_FLOW, { jobId: job.id }, FLOW_TTL_MS);
       out.push(
         text(
@@ -155,7 +181,89 @@ export function createTracking(deps: TrackingDeps) {
     return out;
   }
 
-  /** Reply to the "what's this job called?" question after adding a link. */
+  /** Several links in one message: save them all, then summarise. */
+  async function addLinks(user: User, rawUrls: string[]): Promise<OutgoingMessage[]> {
+    const urls = rawUrls.slice(0, MAX_LINKS_PER_MESSAGE);
+    const results: SavedLink[] = [];
+    // A few at a time: link previews hit other people's websites.
+    for (let i = 0; i < urls.length; i += LINK_CONCURRENCY) {
+      const batch = urls.slice(i, i + LINK_CONCURRENCY);
+      results.push(...(await Promise.all(batch.map((u) => saveLink(user, u)))));
+    }
+
+    const ok = results.filter((r) => r.kind !== 'invalid');
+    // The same job can come from two different links (e.g. tracking variants).
+    const unique = [...new Map(ok.map((r) => [r.job.id, r])).values()];
+    const added = unique.filter((r) => r.kind === 'new');
+    const already = unique.length - added.length;
+    const invalid = results.length - ok.length;
+    const untitled = unique.filter((r) => r.needsTitle).length;
+
+    const lines = [`📥 บันทึกจาก ${results.length} ลิงก์`];
+    if (added.length) lines.push(`✅ เพิ่มใหม่ ${added.length} งาน ใน ⭐ ที่เก็บไว้`);
+    for (const r of added.slice(0, 10)) lines.push(`• ${nameOf(r.job)}`);
+    if (already) lines.push(`↩️ มีอยู่แล้ว ${already} งาน`);
+    if (invalid) lines.push(`⚠️ ใช้ไม่ได้ ${invalid} ลิงก์`);
+    if (untitled) {
+      lines.push(
+        '',
+        `✏️ มี ${untitled} งานที่อ่านชื่อไม่ได้ — กด "📝 โน้ต" ที่การ์ด แล้วกด ✏️ แก้ชื่อ`,
+      );
+    }
+    if (rawUrls.length > MAX_LINKS_PER_MESSAGE) {
+      lines.push(
+        '',
+        `(รับได้ครั้งละ ${MAX_LINKS_PER_MESSAGE} ลิงก์ ส่งที่เหลือมาอีกข้อความได้เลย)`,
+      );
+    }
+
+    const out: OutgoingMessage[] = [text(lines.join('\n'), [savedListButton])];
+    if (unique.length) {
+      const counts = await Promise.all(unique.map((r) => notes.count(user.id, r.job.id)));
+      out.push({
+        type: 'flex',
+        altText: `บันทึกงานจากลิงก์ ${unique.length} งาน`,
+        contents: {
+          type: 'carousel',
+          contents: unique
+            .slice(0, 12)
+            .map((r, i) =>
+              jobBubble(
+                { ...r.job, stage: r.entry.stage, noteCount: counts[i] ?? 0 },
+                r.entry.status === 'applied' ? 'applied' : 'saved',
+                { addFriendUrl: deps.getAddFriendUrl?.() },
+              ),
+            ),
+        },
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Link jobs are shared by everyone who saved the same URL, so a rename is only allowed while
+   * the job has no real title yet, or when nobody else has it in their list.
+   */
+  async function canRename(user: User, job: Job): Promise<boolean> {
+    if (job.provider !== LINK_PROVIDER) return false;
+    if (isPlaceholder(job)) return true;
+    return (await userJobs.otherTrackers(user.id, job.id)) === 0;
+  }
+
+  /** "✏️ แก้ชื่อ" from the detail view. */
+  async function askTitle(user: User, jobId: string): Promise<OutgoingMessage[]> {
+    const job = await jobs.getById(jobId);
+    if (!job) return notFound();
+    if (!(await canRename(user, job))) return [cannotRename(job)];
+    await sessions.set(user.id, LINK_TITLE_FLOW, { jobId: job.id }, FLOW_TTL_MS);
+    return [
+      text(`✏️ พิมพ์ชื่อใหม่ได้เลยครับ เช่น\nData Analyst @ SCB\n\nตอนนี้: ${nameOf(job)}`, [
+        sayButton('ยกเลิก'),
+      ]),
+    ];
+  }
+
+  /** Reply to the "what's this job called?" question. */
   async function nameJob(user: User, jobId: string, input: string): Promise<OutgoingMessage[]> {
     await sessions.clear(user.id);
     const job = await jobs.getById(jobId);
@@ -164,8 +272,7 @@ export function createTracking(deps: TrackingDeps) {
     if (CANCEL_WORDS.includes(input.trim().toLowerCase()) || !parsed) {
       return [text(`โอเคครับ ใช้ชื่อ "${job.title}" ไปก่อน`)];
     }
-    // Only jobs users added themselves can be renamed; synced postings keep the board's data.
-    if (job.provider !== LINK_PROVIDER) return [text('งานนี้ใช้ชื่อจากประกาศต้นทางครับ')];
+    if (!(await canRename(user, job))) return [cannotRename(job)];
     await jobs.rename(job.id, parsed.title, parsed.company);
     const renamed = { ...job, title: parsed.title, company: parsed.company ?? job.company };
     return [
@@ -210,12 +317,16 @@ export function createTracking(deps: TrackingDeps) {
     if (body.length > LINE_TEXT_MAX) body = body.slice(0, LINE_TEXT_MAX - 1) + '…';
 
     const buttons = [noteButton(job)];
+    if (job.url.length <= 1000) buttons.push(linkButton('🔗 เปิดประกาศ', job.url));
     if (entry?.status === 'applied') {
-      buttons.push(stageButton(job), interviewButton(job), appliedListButton);
+      buttons.push(stageButton(job), interviewButton(job));
     } else {
       buttons.push(postbackButton('✅ สมัครแล้ว', { a: 'job', v: 'apply', j: job.id }));
-      buttons.push(savedListButton);
     }
+    if (await canRename(user, job)) {
+      buttons.push(postbackButton('✏️ แก้ชื่อ', { a: 'title', v: 'edit', j: job.id }));
+    }
+    buttons.push(entry?.status === 'applied' ? appliedListButton : savedListButton);
     return [text(body, buttons)];
   }
 
@@ -286,5 +397,16 @@ export function createTracking(deps: TrackingDeps) {
     return [text(lines.join('\n'), buttons)];
   }
 
-  return { addLink, nameJob, skipTitle, detail, startNote, saveNote, stageMenu, setStage };
+  return {
+    addLink,
+    addLinks,
+    askTitle,
+    nameJob,
+    skipTitle,
+    detail,
+    startNote,
+    saveNote,
+    stageMenu,
+    setStage,
+  };
 }

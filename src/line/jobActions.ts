@@ -3,11 +3,19 @@ import { rankJobs } from '../jobs/match.js';
 import type { JobRepository, UserJobRepository, UserJobStatus } from '../jobs/repository.js';
 import type { PrefsRepository } from '../prefs/repository.js';
 import { jobCarousel } from './jobCards.js';
+import {
+  CARD_PAGE_SIZE,
+  jobListMessage,
+  LIST_PAGE_SIZE,
+  LIST_TITLE,
+  listData,
+  type ListStatus,
+  type ListView,
+} from './jobList.js';
 import type { OutgoingMessage } from './messenger.js';
 import { postbackButton, text } from './ui.js';
 
 export const FEED_PAGE_SIZE = 5;
-const LIST_LIMIT = 10;
 
 export interface JobActionDeps {
   prefs: PrefsRepository;
@@ -70,33 +78,59 @@ export function createJobActions(deps: JobActionDeps) {
         'feed',
         {
           altText: `งานที่ตรงกับคุณ ${slice.length} ตำแหน่ง`,
-          nextPage: hasMore ? page + 1 : undefined,
+          more: hasMore ? { a: 'feed', p: String(page + 1) } : undefined,
           addFriendUrl: deps.getAddFriendUrl?.(),
         },
       ),
     ];
   }
 
-  async function list(user: User, status: 'saved' | 'applied'): Promise<OutgoingMessage[]> {
-    const [items, total] = await Promise.all([
-      userJobs.list(user.id, status, LIST_LIMIT),
-      userJobs.count(user.id, status),
-    ]);
-    const title = status === 'saved' ? '⭐ งานที่เก็บไว้' : '📋 งานที่สมัครไว้';
-    if (items.length === 0) {
+  /**
+   * Saved / applied jobs. 'list' is a compact, paged list (easy to scan when there are many);
+   * 'card' is the familiar carousel with action buttons.
+   */
+  async function list(
+    user: User,
+    status: ListStatus,
+    view: ListView = 'list',
+    requestedPage = 1,
+  ): Promise<OutgoingMessage[]> {
+    const total = await userJobs.count(user.id, status);
+    const title = LIST_TITLE[status];
+    if (total === 0) {
       const hint =
         status === 'saved'
-          ? 'กด ⭐ เก็บไว้ ที่การ์ดงาน เพื่อเก็บงานที่สนใจไว้ดูทีหลัง'
+          ? 'กด ⭐ เก็บไว้ ที่การ์ดงาน หรือส่งลิงก์งานมาในแชท เพื่อเก็บไว้ดูทีหลัง'
           : 'สมัครงานแล้วกด ✅ สมัครแล้ว ที่การ์ดงาน ระบบจะจดไว้ให้';
       return [text(`${title}\nยังไม่มีงานครับ\n\n${hint}`, [feedButton])];
     }
-    const more = total > items.length ? ` (แสดง ${items.length} ล่าสุด)` : '';
+
+    const size = view === 'list' ? LIST_PAGE_SIZE : CARD_PAGE_SIZE;
+    const pages = Math.ceil(total / size);
+    const page = Math.min(Math.max(1, requestedPage), pages);
+    const items = await userJobs.list(user.id, status, size, (page - 1) * size);
+
+    if (view === 'list') return [jobListMessage(items, status, { total, page })];
+
+    const first = (page - 1) * size + 1;
+    const nav = [
+      postbackButton('📄 แบบรายการ', listData(status, 'list', Math.ceil(first / LIST_PAGE_SIZE))),
+    ];
+    if (page > 1) nav.push(postbackButton('◀ ก่อนหน้า', listData(status, 'card', page - 1)));
+    if (page < pages) nav.push(postbackButton('ถัดไป ▶', listData(status, 'card', page + 1)));
     return [
-      text(`${title} ${total} งาน${more}`),
+      text(
+        `${title} ${total} งาน${pages > 1 ? ` (${first}–${first + items.length - 1})` : ''}`,
+        nav,
+      ),
       jobCarousel(
         items.map(({ job, stage, noteCount }) => ({ job: { ...job, stage, noteCount } })),
         status,
-        { altText: `${title} ${total} งาน`, addFriendUrl: deps.getAddFriendUrl?.() },
+        {
+          altText: `${title} ${total} งาน`,
+          addFriendUrl: deps.getAddFriendUrl?.(),
+          more: page < pages ? listData(status, 'card', page + 1) : undefined,
+        },
       ),
     ];
   }

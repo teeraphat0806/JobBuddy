@@ -57,8 +57,10 @@ export interface UserJobRepository {
   setStage(userId: string, jobId: string, stage: ApplicationStage): Promise<void>;
   clear(userId: string, jobId: string): Promise<void>;
   /** Most recently updated first. */
-  list(userId: string, status: UserJobStatus, limit: number): Promise<ListedJob[]>;
+  list(userId: string, status: UserJobStatus, limit: number, offset?: number): Promise<ListedJob[]>;
   count(userId: string, status: UserJobStatus): Promise<number>;
+  /** How many other users have this job in any list. */
+  otherTrackers(userId: string, jobId: string): Promise<number>;
 }
 
 const CHUNK = 200;
@@ -203,7 +205,7 @@ export function createUserJobRepository(db: Db): UserJobRepository {
       await db.delete(userJobs).where(and(eq(userJobs.userId, userId), eq(userJobs.jobId, jobId)));
     },
 
-    list(userId, status, limit) {
+    list(userId, status, limit, offset = 0) {
       const noteCount = sql<number>`(
         select count(*)::int from ${jobNotes}
         where ${jobNotes.userId} = ${userJobs.userId} and ${jobNotes.jobId} = ${userJobs.jobId}
@@ -213,8 +215,17 @@ export function createUserJobRepository(db: Db): UserJobRepository {
         .from(userJobs)
         .innerJoin(jobs, eq(userJobs.jobId, jobs.id))
         .where(and(eq(userJobs.userId, userId), eq(userJobs.status, status)))
-        .orderBy(desc(userJobs.updatedAt))
-        .limit(limit);
+        .orderBy(desc(userJobs.updatedAt), desc(userJobs.jobId))
+        .limit(limit)
+        .offset(offset);
+    },
+
+    async otherTrackers(userId, jobId) {
+      const [row] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(userJobs)
+        .where(and(eq(userJobs.jobId, jobId), ne(userJobs.userId, userId)));
+      return row?.n ?? 0;
     },
 
     async count(userId, status) {

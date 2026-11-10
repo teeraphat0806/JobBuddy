@@ -256,7 +256,9 @@ describe('job feed', () => {
   it('saves a job, lists it, and keeps it out of the feed', async () => {
     const { bot, ids } = await botWithJobs();
     expect((await bot.tap({ a: 'job', v: 'save', j: ids.exact }))[0]).toContain('เก็บไว้แล้ว');
-    expect((await bot.tap({ a: 'menu', m: 'saved' }))[0]).toContain('งานที่เก็บไว้ 1 งาน');
+    expect((await bot.tap({ a: 'list', s: 'saved', v: 'card', p: '1' }))[0]).toContain(
+      'งานที่เก็บไว้ 1 งาน',
+    );
     expect((await bot.tap({ a: 'menu', m: 'feed' }))[0]).toContain('เจอ 1 งาน');
   });
 
@@ -264,7 +266,9 @@ describe('job feed', () => {
     const { bot, ids } = await botWithJobs();
     await bot.tap({ a: 'job', v: 'apply', j: ids.ba });
     expect((await bot.tap({ a: 'job', v: 'save', j: ids.ba }))[0]).toContain('สมัครไปแล้ว');
-    expect((await bot.tap({ a: 'menu', m: 'applied' }))[0]).toContain('งานที่สมัครไว้ 1 งาน');
+    expect((await bot.tap({ a: 'list', s: 'applied', v: 'card', p: '1' }))[0]).toContain(
+      'งานที่สมัครไว้ 1 งาน',
+    );
     expect((await bot.tap({ a: 'menu', m: 'saved' }))[0]).toContain('ยังไม่มีงาน');
   });
 
@@ -281,7 +285,7 @@ describe('job feed', () => {
     await bot.tap({ a: 'job', v: 'save', j: ids.exact });
     await bot.tap({ a: 'job', v: 'apply', j: ids.exact });
     expect((await bot.tap({ a: 'menu', m: 'saved' }))[0]).toContain('ยังไม่มีงาน');
-    expect((await bot.tap({ a: 'menu', m: 'applied' }))[0]).toContain('1 งาน');
+    expect((await bot.tap({ a: 'list', s: 'applied', v: 'card', p: '1' }))[0]).toContain('1 งาน');
   });
 
   it('suggests editing preferences when nothing matches', async () => {

@@ -65,7 +65,7 @@ describe('job cards', () => {
 
   it('caps a carousel at 12 bubbles including the "more" bubble', () => {
     const items = Array.from({ length: 20 }, () => ({ job }));
-    const msg = jobCarousel(items, 'feed', { altText: 'x', nextPage: 2 }) as {
+    const msg = jobCarousel(items, 'feed', { altText: 'x', more: { a: 'feed', p: '2' } }) as {
       contents: { contents: unknown[] };
     };
     expect(msg.contents.contents).toHaveLength(12);

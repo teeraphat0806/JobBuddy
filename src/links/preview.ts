@@ -21,11 +21,17 @@ export type LinkPreviewer = (url: string) => Promise<LinkPreview>;
 
 const MAX_URL = 1000; // LINE URI actions can't be longer than this.
 
+const URL_PATTERN = /https?:\/\/[^\s<>"'“”]+/gi;
+const trimUrl = (u: string) => u.replace(/[),.;:!?\]}>）。、]+$/u, '');
+
 /** First http(s) URL in a message, without trailing punctuation. */
 export function extractUrl(text: string): string | null {
-  const m = /https?:\/\/[^\s<>"'“”]+/i.exec(text);
-  if (!m) return null;
-  return m[0].replace(/[),.;:!?\]}>）。、]+$/u, '');
+  return extractUrls(text)[0] ?? null;
+}
+
+/** Every distinct http(s) URL in a message, in order. */
+export function extractUrls(text: string): string[] {
+  return [...new Set([...text.matchAll(URL_PATTERN)].map((m) => trimUrl(m[0])))];
 }
 
 const TRACKING_PARAMS = /^(utm_\w+|fbclid|gclid|igshid|mc_\w+|trk\w*|refid|trackingid|ref|src)$/i;
