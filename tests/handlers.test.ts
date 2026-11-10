@@ -305,3 +305,24 @@ describe('job feed', () => {
     );
   });
 });
+
+describe('when LINE rejects a reply', () => {
+  it('logs LINE’s explanation and sends a plain-text apology instead of going silent', async () => {
+    const bot = await consentedBot();
+    const rejection = Object.assign(new Error('400 - Bad Request'), {
+      status: 400,
+      body: '{"message":"A message (messages[1]) in the request body is invalid","details":[{"property":"/contents/0/footer"}]}',
+    });
+    bot.line.reply.mockRejectedValueOnce(rejection);
+    const reply = await bot.tap({ a: 'menu', m: 'help' });
+    expect(reply[0]).toContain('แสดงผลไม่สำเร็จ');
+  });
+
+  it('does not retry on other errors (e.g. an expired reply token)', async () => {
+    const bot = await consentedBot();
+    const calls = bot.line.reply.mock.calls.length;
+    bot.line.reply.mockRejectedValueOnce(Object.assign(new Error('401'), { status: 401 }));
+    await bot.tap({ a: 'menu', m: 'help' });
+    expect(bot.line.reply.mock.calls.length).toBe(calls + 1);
+  });
+});

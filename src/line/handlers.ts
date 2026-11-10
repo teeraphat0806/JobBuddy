@@ -1,7 +1,7 @@
 import type { webhook } from '@line/bot-sdk';
 import type { SessionRepository } from '../conversation/repository.js';
 import type { User } from '../db/schema.js';
-import { errorFields, type Logger } from '../lib/logger.js';
+import { errorFields, httpStatusOf, type Logger } from '../lib/logger.js';
 import type { JobRepository, UserJobRepository } from '../jobs/repository.js';
 import type { PrefsRepository } from '../prefs/repository.js';
 import {
@@ -183,8 +183,21 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
       messages = await onInput(lineUserId, input);
     }
 
-    // A single reply holds at most 5 messages.
-    if (messages.length > 0) await line.reply(replyToken, messages.slice(0, 5));
+    if (messages.length === 0) return;
+    try {
+      // A single reply holds at most 5 messages.
+      await line.reply(replyToken, messages.slice(0, 5));
+    } catch (err) {
+      // LINE rejected the message itself (e.g. an invalid Flex property). The reply token
+      // isn't used up by a rejected request, so tell the user rather than going silent.
+      if (httpStatusOf(err) !== 400) throw err;
+      logger.error('LINE rejected reply', {
+        eventType: event.type,
+        messageTypes: messages.map((m) => m.type),
+        ...errorFields(err),
+      });
+      await line.reply(replyToken, [msg.replyFailed()]);
+    }
   }
 
   return async (events) => {

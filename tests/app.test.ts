@@ -77,3 +77,18 @@ describe('GET /health', () => {
     expect(res.status).toBe(503);
   });
 });
+
+describe('errorFields', () => {
+  it('includes the LINE API status and response body', async () => {
+    const { errorFields } = await import('../src/lib/logger.js');
+    const err = Object.assign(new Error('400 - Bad Request'), {
+      status: 400,
+      body: '{"message":"bad flex"}',
+    });
+    expect(errorFields(err)).toMatchObject({
+      error: '400 - Bad Request',
+      status: 400,
+      body: '{"message":"bad flex"}',
+    });
+  });
+});

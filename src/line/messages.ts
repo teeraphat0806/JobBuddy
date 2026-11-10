@@ -71,6 +71,10 @@ export function currentPrefs(prefs: PrefsInput): OutgoingMessage {
   ]);
 }
 
+export function replyFailed(): OutgoingMessage {
+  return text('ขออภัยครับ 🙏 แสดงผลไม่สำเร็จ ทีมงานได้รับแจ้งแล้ว ลองใหม่อีกครั้งภายหลังนะครับ');
+}
+
 export function needsPrefs(): OutgoingMessage {
   return text('ก่อนหางาน ขอรู้ก่อนว่าคุณอยากได้งานแบบไหนครับ 🙂');
 }

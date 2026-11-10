@@ -21,5 +21,15 @@ export function errorFields(err: unknown): Record<string, unknown> {
   if (err.cause !== undefined) {
     fields.cause = err.cause instanceof Error ? err.cause.message : String(err.cause);
   }
+  // LINE SDK HTTPFetchError: the response body says exactly which property was rejected.
+  const http = err as { status?: unknown; body?: unknown };
+  if (typeof http.status === 'number') fields.status = http.status;
+  if (typeof http.body === 'string' && http.body) fields.body = http.body.slice(0, 2000);
   return fields;
+}
+
+/** HTTP status of a LINE API error, if that's what this is. */
+export function httpStatusOf(err: unknown): number | undefined {
+  const status = (err as { status?: unknown } | null)?.status;
+  return typeof status === 'number' ? status : undefined;
 }
