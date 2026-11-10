@@ -12,6 +12,12 @@ const envSchema = z.object({
     .enum(['true', 'false'])
     .default('true')
     .transform((v) => v === 'true'),
+  /** Pull jobs from company job boards on a schedule. */
+  JOB_SYNC: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  JOB_SYNC_INTERVAL_HOURS: z.coerce.number().positive().max(168).default(6),
 });
 
 export type Env = z.infer<typeof envSchema>;

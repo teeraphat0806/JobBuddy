@@ -168,7 +168,8 @@ export function advanceWizard(state: WizardState, input: WizardInput): WizardRes
         messages: [
           text(
             `บันทึกแล้ว ✅\n\n${formatPrefs(prefs)}\n\n` +
-              'เดี๋ยวผมจะหางานที่ตรงกับคุณมาให้ กด 🔍 งานใหม่วันนี้ ในเมนูด้านล่างได้เลยครับ',
+              'กด 🔍 ดูงานเลย หรือเมนู งานใหม่วันนี้ ด้านล่างได้ทุกเมื่อครับ',
+            [postbackButton('🔍 ดูงานเลย', { a: 'feed', p: '1' })],
           ),
         ],
       };

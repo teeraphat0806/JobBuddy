@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { webhook } from '@line/bot-sdk';
 import { vi } from 'vitest';
 import type { SessionRepository } from '../src/conversation/repository.js';
-import type { User } from '../src/db/schema.js';
+import type { Job, User } from '../src/db/schema.js';
+import type { JobRepository, UserJobRepository, UserJobStatus } from '../src/jobs/repository.js';
 import { createEventsHandler } from '../src/line/handlers.js';
 import type { LineMessenger, OutgoingMessage } from '../src/line/messenger.js';
 import { encodePostback, type PostbackData } from '../src/line/postback.js';
@@ -79,6 +80,69 @@ export function createFakeBot() {
     clear: async (userId) => void sessionsByUser.delete(userId),
   };
 
+  const jobRows = new Map<string, Job>();
+  const userJobRows = new Map<string, { status: UserJobStatus; at: number }>();
+  const ujKey = (userId: string, jobId: string) => `${userId}:${jobId}`;
+  let tick = 0;
+
+  const jobs: JobRepository = {
+    async upsertListings() {},
+    async deactivateMissing() {
+      return 0;
+    },
+    listActive: async () => [...jobRows.values()].filter((j) => j.active),
+    getById: async (id) => jobRows.get(id),
+    lastSyncedAt: async () => null,
+  };
+
+  const userJobs: UserJobRepository = {
+    async statuses(userId) {
+      const out = new Map<string, UserJobStatus>();
+      for (const [k, v] of userJobRows)
+        if (k.startsWith(`${userId}:`)) out.set(k.split(':')[1]!, v.status);
+      return out;
+    },
+    getStatus: async (userId, jobId) => userJobRows.get(ujKey(userId, jobId))?.status,
+    setStatus: async (userId, jobId, status) =>
+      void userJobRows.set(ujKey(userId, jobId), { status, at: ++tick }),
+    clear: async (userId, jobId) => void userJobRows.delete(ujKey(userId, jobId)),
+    async list(userId, status, limit) {
+      return [...userJobRows.entries()]
+        .filter(([k, v]) => k.startsWith(`${userId}:`) && v.status === status)
+        .sort((a, b) => b[1].at - a[1].at)
+        .slice(0, limit)
+        .map(([k]) => jobRows.get(k.split(':')[1]!)!);
+    },
+    async count(userId, status) {
+      return [...userJobRows.entries()].filter(
+        ([k, v]) => k.startsWith(`${userId}:`) && v.status === status,
+      ).length;
+    },
+  };
+
+  /** Add a job to the fake catalogue; returns its id. */
+  function addJob(partial: Partial<Job> & { title: string }): string {
+    const now = new Date();
+    const job: Job = {
+      id: randomUUID(),
+      provider: 'greenhouse',
+      board: 'acme',
+      externalId: randomUUID(),
+      company: 'Acme',
+      location: 'Bangkok, Thailand',
+      department: null,
+      workplace: null,
+      url: 'https://example.com/jobs/1',
+      postedAt: now,
+      firstSeenAt: now,
+      lastSeenAt: now,
+      active: true,
+      ...partial,
+    };
+    jobRows.set(job.id, job);
+    return job.id;
+  }
+
   const replies: OutgoingMessage[][] = [];
   const line = {
     reply: vi.fn(async (_token: string, messages: OutgoingMessage[]) => {
@@ -86,9 +150,19 @@ export function createFakeBot() {
     }),
     push: vi.fn(async () => {}),
     getProfile: vi.fn(async () => ({ displayName: 'Ton', language: 'th' })),
+    getBotBasicId: vi.fn(async () => '@jobbuddy'),
   } satisfies LineMessenger;
 
-  const handle = createEventsHandler({ users, prefs, sessions, line, logger: silentLogger });
+  const handle = createEventsHandler({
+    users,
+    prefs,
+    sessions,
+    jobs,
+    userJobs,
+    line,
+    logger: silentLogger,
+    getAddFriendUrl: () => 'https://line.me/R/ti/p/%40jobbuddy',
+  });
 
   const base = (userId: string) => ({
     timestamp: 0,
@@ -113,6 +187,9 @@ export function createFakeBot() {
     usersByLineId,
     prefsByUser,
     sessionsByUser,
+    jobRows,
+    userJobRows,
+    addJob,
     line,
     handle,
     lastReply,

@@ -2,6 +2,7 @@ import type { webhook } from '@line/bot-sdk';
 import type { SessionRepository } from '../conversation/repository.js';
 import type { User } from '../db/schema.js';
 import { errorFields, type Logger } from '../lib/logger.js';
+import type { JobRepository, UserJobRepository } from '../jobs/repository.js';
 import type { PrefsRepository } from '../prefs/repository.js';
 import {
   advanceWizard,
@@ -12,6 +13,7 @@ import {
   type WizardResult,
 } from '../prefs/wizard.js';
 import type { LineProfile, UserRepository } from '../users/repository.js';
+import { createJobActions } from './jobActions.js';
 import * as msg from './messages.js';
 import type { LineMessenger, OutgoingMessage } from './messenger.js';
 import { decodePostback, type PostbackData } from './postback.js';
@@ -20,8 +22,11 @@ export interface HandlerDeps {
   users: UserRepository;
   prefs: PrefsRepository;
   sessions: SessionRepository;
+  jobs: JobRepository;
+  userJobs: UserJobRepository;
   line: LineMessenger;
   logger: Logger;
+  getAddFriendUrl?: () => string | undefined;
 }
 
 export type EventsHandler = (events: webhook.Event[]) => Promise<void>;
@@ -32,6 +37,7 @@ type Input =
 
 const HELP_WORDS = ['วิธีใช้', 'help', 'เมนู', 'ช่วยด้วย', '?'];
 const PREFS_WORDS = ['ตั้งค่า', 'ตั้งค่างาน', 'settings'];
+const FEED_WORDS = ['งาน', 'งานใหม่', 'งานใหม่วันนี้', 'หางาน', 'jobs'];
 const DELETE_WORDS = ['ลบข้อมูลของฉัน', 'ลบข้อมูล'];
 
 function userIdOf(event: webhook.Event): string | undefined {
@@ -51,6 +57,13 @@ function inputOf(event: webhook.Event): Input | undefined {
 
 export function createEventsHandler(deps: HandlerDeps): EventsHandler {
   const { users, prefs, sessions, line, logger } = deps;
+  const jobActions = createJobActions(deps);
+
+  async function showFeed(user: User, page: number): Promise<OutgoingMessage[]> {
+    const result = await jobActions.feed(user, page);
+    if (result !== 'needs-prefs') return result;
+    return [msg.needsPrefs(), ...(await applyWizard(user, startWizard()))];
+  }
 
   /** Persist a wizard step's outcome and return what to reply. */
   async function applyWizard(user: User, result: WizardResult): Promise<OutgoingMessage[]> {
@@ -105,6 +118,11 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
     if (pb?.a === 'menu') {
       await sessions.clear(user.id);
       switch (pb.m) {
+        case 'feed':
+          return showFeed(user, 1);
+        case 'saved':
+        case 'applied':
+          return jobActions.list(user, pb.m);
         case 'prefs':
           return showOrStartPrefs(user);
         case 'help':
@@ -114,6 +132,12 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
       }
     }
     if (pb?.a === 'prefs' && pb.v === 'edit') return applyWizard(user, startWizard());
+    if (pb?.a === 'feed') {
+      await sessions.clear(user.id);
+      const page = Number.parseInt(pb.p ?? '1', 10);
+      return showFeed(user, Number.isFinite(page) && page > 0 ? page : 1);
+    }
+    if (pb?.a === 'job' && pb.v && pb.j) return jobActions.act(user, pb.v, pb.j);
 
     const session = await sessions.get(user.id);
     const wizard = session?.flow === WIZARD_FLOW ? asWizardState(session.state) : null;
@@ -128,6 +152,7 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
     if (typed !== undefined) {
       const lower = typed.toLowerCase();
       if (PREFS_WORDS.includes(lower)) return showOrStartPrefs(user);
+      if (FEED_WORDS.includes(lower)) return showFeed(user, 1);
       if (HELP_WORDS.includes(lower)) return [msg.helpMessage()];
     }
     return [msg.notUnderstood()];

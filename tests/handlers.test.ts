@@ -122,9 +122,7 @@ describe('preferences wizard', () => {
 describe('menu and commands', () => {
   it('answers not-yet-built menu items with a coming-soon message', async () => {
     const bot = await consentedBot();
-    for (const m of ['feed', 'saved', 'applied', 'interviews']) {
-      expect((await bot.tap({ a: 'menu', m }))[0]).toContain('กำลังพัฒนา');
-    }
+    expect((await bot.tap({ a: 'menu', m: 'interviews' }))[0]).toContain('กำลังพัฒนา');
   });
 
   it('replies to unknown text and stickers with guidance', async () => {
@@ -196,5 +194,114 @@ describe('robustness', () => {
     await bot.unfollow();
     await bot.follow();
     expect(bot.lastReply().length).toBeLessThanOrEqual(5);
+  });
+});
+
+describe('job feed', () => {
+  async function botWithJobs() {
+    const bot = await consentedBot();
+    await completeWizard(bot); // Data Analyst / Business Analyst, กรุงเทพฯ, hybrid
+    const ids = {
+      exact: bot.addJob({ title: 'Data Analyst', company: 'Agoda' }),
+      ba: bot.addJob({ title: 'Business Analyst', company: 'Grab' }),
+      chef: bot.addJob({ title: 'Chef' }),
+      rayong: bot.addJob({ title: 'Data Analyst', location: 'Rayong, Thailand' }),
+    };
+    return { bot, ids };
+  }
+
+  it('asks for preferences first when none are set', async () => {
+    const bot = await consentedBot();
+    await bot.say('ยกเลิก');
+    const reply = await bot.tap({ a: 'menu', m: 'feed' });
+    expect(reply[0]).toContain('อยากได้งานแบบไหน');
+    expect(reply.join('\n')).toContain('1/5');
+  });
+
+  it('tells the user when no jobs have been collected yet', async () => {
+    const bot = await consentedBot();
+    await completeWizard(bot);
+    expect((await bot.tap({ a: 'menu', m: 'feed' }))[0]).toContain('กำลังรวบรวม');
+  });
+
+  it('shows matching jobs as a carousel, filtered by role and location', async () => {
+    const { bot } = await botWithJobs();
+    const reply = await bot.tap({ a: 'menu', m: 'feed' });
+    expect(reply[0]).toContain('เจอ 2 งาน');
+    expect(reply[1]).toBe('[flex]');
+    const flex = JSON.stringify(bot.lastReply()[1]);
+    expect(flex).toContain('Data Analyst');
+    expect(flex).toContain('Business Analyst');
+    expect(flex).not.toContain('Chef');
+    expect(flex).not.toContain('Rayong');
+  });
+
+  it('also opens the feed from text and from the button after saving preferences', async () => {
+    const { bot } = await botWithJobs();
+    expect((await bot.say('หางาน'))[0]).toContain('เจอ 2 งาน');
+    expect((await bot.tap({ a: 'feed', p: '1' }))[0]).toContain('เจอ 2 งาน');
+  });
+
+  it('pages through results 5 at a time', async () => {
+    const bot = await consentedBot();
+    await completeWizard(bot);
+    for (let i = 0; i < 7; i++) bot.addJob({ title: `Data Analyst ${i}` });
+    await bot.tap({ a: 'menu', m: 'feed' });
+    expect(JSON.stringify(bot.lastReply()[1])).toContain('ดูเพิ่ม');
+    const page2 = await bot.tap({ a: 'feed', p: '2' });
+    expect(page2[0]).toContain('งานที่ 6–7 จาก 7');
+    expect(JSON.stringify(bot.lastReply()[1])).not.toContain('ดูเพิ่ม');
+  });
+
+  it('saves a job, lists it, and keeps it out of the feed', async () => {
+    const { bot, ids } = await botWithJobs();
+    expect((await bot.tap({ a: 'job', v: 'save', j: ids.exact }))[0]).toContain('เก็บไว้แล้ว');
+    expect((await bot.tap({ a: 'menu', m: 'saved' }))[0]).toContain('งานที่เก็บไว้ 1 งาน');
+    expect((await bot.tap({ a: 'menu', m: 'feed' }))[0]).toContain('เจอ 1 งาน');
+  });
+
+  it('records applied jobs and does not downgrade them to saved', async () => {
+    const { bot, ids } = await botWithJobs();
+    await bot.tap({ a: 'job', v: 'apply', j: ids.ba });
+    expect((await bot.tap({ a: 'job', v: 'save', j: ids.ba }))[0]).toContain('สมัครไปแล้ว');
+    expect((await bot.tap({ a: 'menu', m: 'applied' }))[0]).toContain('งานที่สมัครไว้ 1 งาน');
+    expect((await bot.tap({ a: 'menu', m: 'saved' }))[0]).toContain('ยังไม่มีงาน');
+  });
+
+  it('hides a job from the feed and can undo it', async () => {
+    const { bot, ids } = await botWithJobs();
+    await bot.tap({ a: 'job', v: 'hide', j: ids.exact });
+    expect((await bot.tap({ a: 'menu', m: 'feed' }))[0]).toContain('เจอ 1 งาน');
+    await bot.tap({ a: 'job', v: 'unhide', j: ids.exact });
+    expect((await bot.tap({ a: 'menu', m: 'feed' }))[0]).toContain('เจอ 2 งาน');
+  });
+
+  it('moves a saved job to applied from the saved list', async () => {
+    const { bot, ids } = await botWithJobs();
+    await bot.tap({ a: 'job', v: 'save', j: ids.exact });
+    await bot.tap({ a: 'job', v: 'apply', j: ids.exact });
+    expect((await bot.tap({ a: 'menu', m: 'saved' }))[0]).toContain('ยังไม่มีงาน');
+    expect((await bot.tap({ a: 'menu', m: 'applied' }))[0]).toContain('1 งาน');
+  });
+
+  it('suggests editing preferences when nothing matches', async () => {
+    const bot = await consentedBot();
+    await completeWizard(bot);
+    bot.addJob({ title: 'Chef' });
+    expect((await bot.tap({ a: 'menu', m: 'feed' }))[0]).toContain('ยังไม่เจองาน');
+  });
+
+  it('handles a job that no longer exists', async () => {
+    const { bot } = await botWithJobs();
+    const reply = await bot.tap({ a: 'job', v: 'save', j: '00000000-0000-0000-0000-000000000000' });
+    expect(reply[0]).toContain('ไม่พบงานนี้');
+  });
+
+  it('includes the add-friend link in shared jobs', async () => {
+    const { bot } = await botWithJobs();
+    await bot.tap({ a: 'menu', m: 'feed' });
+    expect(JSON.stringify(bot.lastReply()[1])).toContain(
+      encodeURIComponent('https://line.me/R/ti/p/%40jobbuddy'),
+    );
   });
 });

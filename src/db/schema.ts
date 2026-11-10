@@ -1,12 +1,15 @@
 import { sql } from 'drizzle-orm';
 import {
   boolean,
+  index,
   integer,
   jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 
@@ -83,3 +86,62 @@ export const conversationSessions = pgTable('conversation_sessions', {
     .defaultNow()
     .$onUpdate(() => new Date()),
 });
+
+export const jobWorkplace = pgEnum('job_workplace', ['onsite', 'hybrid', 'remote']);
+
+/**
+ * Job postings collected from public ATS job-board APIs. Shared by all users.
+ * We store only a summary and link out to the original posting for details.
+ */
+export const jobs = pgTable(
+  'jobs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** ATS provider, e.g. "greenhouse", "lever", "smartrecruiters". */
+    provider: text('provider').notNull(),
+    /** Company identifier on that provider (board token / account id). */
+    board: text('board').notNull(),
+    externalId: text('external_id').notNull(),
+    company: text('company').notNull(),
+    title: text('title').notNull(),
+    location: text('location').notNull(),
+    department: text('department'),
+    /** null = the source doesn't say. */
+    workplace: jobWorkplace('workplace'),
+    url: text('url').notNull(),
+    postedAt: timestamp('posted_at', { withTimezone: true }),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    /** false once the posting disappears from its board. */
+    active: boolean('active').notNull().default(true),
+  },
+  (t) => [
+    uniqueIndex('jobs_source_unique').on(t.provider, t.board, t.externalId),
+    index('jobs_active_idx').on(t.active),
+  ],
+);
+
+export type Job = typeof jobs.$inferSelect;
+export type NewJob = typeof jobs.$inferInsert;
+
+export const userJobStatus = pgEnum('user_job_status', ['saved', 'applied', 'hidden']);
+
+/** A user's relationship with a job: saved for later, applied, or hidden from the feed. */
+export const userJobs = pgTable(
+  'user_jobs',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    jobId: uuid('job_id')
+      .notNull()
+      .references(() => jobs.id, { onDelete: 'cascade' }),
+    status: userJobStatus('status').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.jobId] })],
+);

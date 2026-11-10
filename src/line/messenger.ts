@@ -11,6 +11,8 @@ export interface LineMessenger {
   reply(replyToken: string, messages: OutgoingMessage[]): Promise<void>;
   push(to: string, messages: OutgoingMessage[]): Promise<void>;
   getProfile(userId: string): Promise<LineProfile>;
+  /** The OA's basic ID, e.g. "@abc1234" (used for add-friend links). */
+  getBotBasicId(): Promise<string>;
 }
 
 export function createLineMessenger(channelAccessToken: string): LineMessenger {
@@ -25,6 +27,9 @@ export function createLineMessenger(channelAccessToken: string): LineMessenger {
     async getProfile(userId) {
       const p = await client.getProfile(userId);
       return { displayName: p.displayName, pictureUrl: p.pictureUrl, language: p.language };
+    },
+    async getBotBasicId() {
+      return (await client.getBotInfo()).basicId;
     },
   };
 }

@@ -3,8 +3,9 @@
 ผู้ช่วยหางานใน LINE — รวมงานจากหลายเว็บ, บันทึกงานที่สมัคร, ปฏิทินสัมภาษณ์ และโน้ต ไว้ที่เดียว
 แค่เพิ่มเพื่อน LINE Official Account ก็ใช้ได้เลย
 
-> สถานะ: 🚧 ใช้งานได้: เพิ่มเพื่อน → ยอมรับ PDPA → ตั้งค่างานที่อยากได้ (5 ขั้น) → Rich Menu / ลบข้อมูลของฉัน
-> ถัดไป: ดึงงานจาก Greenhouse/Lever + ปุ่ม "งานใหม่วันนี้" + แชร์ให้เพื่อน
+> สถานะ: 🚧 ใช้งานได้: PDPA → ตั้งค่างาน → 🔍 งานใหม่วันนี้ (~480 งานในไทยจาก 15 บริษัท) →
+> ⭐ เก็บไว้ / ✅ สมัครแล้ว / ❌ ไม่สนใจ / 📤 แชร์ให้เพื่อน → ดูรายการที่เก็บ/สมัครไว้
+> ถัดไป: ส่งลิงก์งานเอง + เปลี่ยนสถานะการสมัคร + โน้ต
 
 ## ฟีเจอร์ (แผน)
 
@@ -39,8 +40,17 @@ src/
 ├── app.ts               # Hono routes: GET /health, POST /webhooks/line
 ├── config/env.ts        # ตรวจ environment variables ด้วย zod
 ├── db/                  # Drizzle schema, client, migration runner
+├── jobs/
+│   ├── sources.ts       # รายชื่อบริษัท + ATS ที่ดึงงาน
+│   ├── providers.ts     # fetcher ของ Greenhouse / Lever / SmartRecruiters
+│   ├── sync.ts          # ดึงงานตามรอบ (ค่าเริ่มต้นทุก 6 ชม.)
+│   ├── match.ts         # ให้คะแนนงานเทียบกับการตั้งค่าของผู้ใช้
+│   ├── synonyms.ts      # คำไทย → คำอังกฤษในชื่อตำแหน่ง (เช่น บัญชี → accountant)
+│   └── location.ts, repository.ts
 ├── line/
-│   ├── handlers.ts      # router: follow / consent / menu / wizard / ลบข้อมูล
+│   ├── handlers.ts      # router: follow / consent / menu / wizard / งาน / ลบข้อมูล
+│   ├── jobActions.ts    # ฟีดงาน, เก็บ/สมัคร/ซ่อน, รายการที่เก็บ/สมัครไว้
+│   ├── jobCards.ts      # การ์ดงาน (Flex carousel) + ลิงก์แชร์ให้เพื่อน
 │   ├── messages.ts      # ข้อความตอบกลับทั้งหมด
 │   ├── richmenu.ts      # layout เมนู + sync กับ LINE ตอน start
 │   ├── messenger.ts     # wrapper ของ LINE Messaging API
@@ -54,6 +64,16 @@ scripts/                 # เครื่องมือสำหรับน�
 drizzle/                 # SQL migrations (สร้างด้วย npm run db:generate)
 tests/                   # vitest
 ```
+
+## แหล่งงาน
+
+ดึงจาก **API สาธารณะของระบบรับสมัครงาน (ATS)** ที่บริษัทเปิดไว้ให้นำประกาศไปแสดงต่อ
+เก็บแค่สรุป (ตำแหน่ง บริษัท สถานที่) แล้วลิงก์กลับไปที่ประกาศต้นทางเสมอ — ไม่ดูดข้อมูลจากเว็บหางาน
+
+- เก็บเฉพาะงานในไทย, upsert ตาม `(provider, board, external_id)`, งานที่หายจากบอร์ดจะถูกตั้ง `active = false`
+- บอร์ดที่ดึงไม่สำเร็จจะ **ไม่** ถูกปิดงาน (กัน API ล่มชั่วคราวแล้วงานหายหมด)
+- เพิ่มบริษัท: ตรวจว่าบอร์ดมีงานในไทย แล้วเพิ่มใน `src/jobs/sources.ts`
+- ปิดการดึงด้วย `JOB_SYNC=false`, เปลี่ยนรอบด้วย `JOB_SYNC_INTERVAL_HOURS`
 
 ## Rich Menu
 

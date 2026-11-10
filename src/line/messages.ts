@@ -71,6 +71,10 @@ export function currentPrefs(prefs: PrefsInput): OutgoingMessage {
   ]);
 }
 
+export function needsPrefs(): OutgoingMessage {
+  return text('ก่อนหางาน ขอรู้ก่อนว่าคุณอยากได้งานแบบไหนครับ 🙂');
+}
+
 export function wizardExpired(): OutgoingMessage {
   return text('การตั้งค่าหมดเวลาแล้วครับ ⏰ เริ่มใหม่ได้เลย', [
     postbackButton('⚙️ ตั้งค่างานใหม่', { a: 'prefs', v: 'edit' }),
