@@ -13,6 +13,7 @@ import { createLineMessenger } from './line/messenger.js';
 import { createInterviewRepository } from './interviews/repository.js';
 import { startReminderScheduler } from './interviews/reminders.js';
 import { createLinkPreviewer } from './links/preview.js';
+import { refreshLinkTitles } from './links/refreshTitles.js';
 import { createNoteRepository } from './notes/repository.js';
 import { createRichMenuApi, loadRichMenuImage, syncRichMenu } from './line/richmenu.js';
 import { errorFields, logger } from './lib/logger.js';
@@ -34,6 +35,7 @@ const { db, sql } = createDb(env.DATABASE_URL);
 const line = createLineMessenger(env.LINE_CHANNEL_ACCESS_TOKEN);
 const jobs = createJobRepository(db);
 const interviews = createInterviewRepository(db);
+const previewLink = createLinkPreviewer();
 
 // Filled in once at startup; shared job cards include it so friends can add the bot.
 let addFriendUrl: string | undefined;
@@ -54,7 +56,7 @@ const app = createApp({
     userJobs: createUserJobRepository(db),
     notes: createNoteRepository(db),
     interviews,
-    previewLink: createLinkPreviewer(),
+    previewLink,
     timeZone: env.APP_TIMEZONE,
     line,
     logger,
@@ -78,6 +80,11 @@ if (env.RICH_MENU_SYNC) {
     .then(() => logger.info('Rich menu in sync'))
     .catch((err: unknown) => logger.warn('Rich menu sync failed', errorFields(err)));
 }
+
+// Links saved before job-board pages could be read keep the whole page title; fix them once.
+void refreshLinkTitles({ jobs, previewLink, logger }).catch((err: unknown) =>
+  logger.warn('Link title refresh failed', errorFields(err)),
+);
 
 const stopJobSync = env.JOB_SYNC
   ? startJobSyncScheduler(jobs, JOB_SOURCES, logger, env.JOB_SYNC_INTERVAL_HOURS * 60 * 60 * 1000)

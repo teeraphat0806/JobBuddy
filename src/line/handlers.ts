@@ -4,7 +4,7 @@ import type { User } from '../db/schema.js';
 import { errorFields, httpStatusOf, type Logger } from '../lib/logger.js';
 import type { InterviewRepository } from '../interviews/repository.js';
 import type { JobRepository, UserJobRepository } from '../jobs/repository.js';
-import { extractUrl, extractUrls, type LinkPreviewer } from '../links/preview.js';
+import { extractAllUrls, extractUrl, type LinkPreviewer } from '../links/preview.js';
 import type { NoteRepository } from '../notes/repository.js';
 import type { PrefsRepository } from '../prefs/repository.js';
 import {
@@ -232,7 +232,7 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
         return tracking.nameJob(user, flow.jobId, typed);
       }
     }
-    const links = typed !== undefined ? extractUrls(typed) : [];
+    const links = typed !== undefined ? extractAllUrls(typed) : [];
     if (links.length === 1) return tracking.addLink(user, links[0]!);
     if (links.length > 1) return tracking.addLinks(user, links);
 

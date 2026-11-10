@@ -31,7 +31,12 @@ export function extractUrl(text: string): string | null {
 
 /** Every distinct http(s) URL in a message, in order. */
 export function extractUrls(text: string): string[] {
-  return [...new Set([...text.matchAll(URL_PATTERN)].map((m) => trimUrl(m[0])))];
+  return [...new Set(extractAllUrls(text))];
+}
+
+/** Every http(s) URL in a message, in order, repeats included (so they can be reported). */
+export function extractAllUrls(text: string): string[] {
+  return [...text.matchAll(URL_PATTERN)].map((m) => trimUrl(m[0]));
 }
 
 const TRACKING_PARAMS = /^(utm_\w+|fbclid|gclid|igshid|mc_\w+|trk\w*|refid|trackingid|ref|src)$/i;
@@ -210,7 +215,13 @@ export function decodeEntities(s: string): string {
 const clean = (s: string | undefined | null) =>
   s ? decodeEntities(s).replace(/\s+/g, ' ').trim() || null : null;
 
-export function parseHtmlMeta(html: string): { title: string | null; siteName: string | null } {
+export interface HtmlMeta {
+  title: string | null;
+  siteName: string | null;
+  description: string | null;
+}
+
+export function parseHtmlMeta(html: string): HtmlMeta {
   const head = html.slice(0, 200_000);
   const meta = new Map<string, string>();
   for (const tag of head.matchAll(/<meta\b[^>]*>/gi)) {
@@ -226,8 +237,139 @@ export function parseHtmlMeta(html: string): { title: string | null; siteName: s
   return {
     title: clean(meta.get('og:title') ?? meta.get('twitter:title') ?? titleTag),
     siteName: clean(meta.get('og:site_name') ?? meta.get('application-name')),
+    description: clean(meta.get('description') ?? meta.get('og:description')),
   };
 }
+
+type Found = Omit<LinkPreview, 'url'>;
+
+const found = (title: string, company: string | null, location = ''): Found => {
+  const loc = location ? cleanLocation(location) : '';
+  const c = company?.trim();
+  return {
+    title: [...title.trim()].slice(0, 200).join(''),
+    company: c ? [...c].slice(0, 100).join('') : null,
+    location: loc,
+    department: null,
+    workplace: workplaceFromText(loc),
+  };
+};
+
+// ---- schema.org JobPosting (JSON-LD), which many job pages embed for search engines.
+
+const LD_SCRIPT =
+  /<script[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+
+function parseLenient(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    // Some sites put raw newlines / tabs inside strings, which strict JSON rejects.
+    try {
+      // eslint-disable-next-line no-control-regex
+      return JSON.parse(raw.replace(/[\u0000-\u001f]+/g, ' '));
+    } catch {
+      return null;
+    }
+  }
+}
+
+function findJobPosting(node: unknown, depth = 0): Record<string, unknown> | null {
+  if (!node || typeof node !== 'object' || depth > 4) return null;
+  if (Array.isArray(node)) {
+    for (const n of node) {
+      const hit = findJobPosting(n, depth + 1);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  const obj = node as Record<string, unknown>;
+  const type = obj['@type'];
+  if (type === 'JobPosting' || (Array.isArray(type) && type.includes('JobPosting'))) return obj;
+  return findJobPosting(obj['@graph'], depth + 1);
+}
+
+function placeOf(jobLocation: unknown): string {
+  const loc: unknown = Array.isArray(jobLocation) ? jobLocation[0] : jobLocation;
+  const address = (loc as { address?: unknown } | undefined)?.address;
+  if (typeof address === 'string') return address;
+  if (!address || typeof address !== 'object') return '';
+  const a = address as Record<string, unknown>;
+  const parts = [a.addressLocality, a.addressRegion]
+    .map((v) => (typeof v === 'string' ? v.trim() : ''))
+    .filter(Boolean);
+  return [...new Set(parts)].join(', ');
+}
+
+/** Title / company / place from an embedded schema.org JobPosting, if the page has one. */
+export function jobPostingFromHtml(html: string): Found | null {
+  for (const m of html.matchAll(LD_SCRIPT)) {
+    const posting = findJobPosting(parseLenient(m[1]!.trim()));
+    if (!posting) continue;
+    const title = clean(str(posting.title));
+    if (!title) continue;
+    const org = posting.hiringOrganization;
+    const company = clean(
+      typeof org === 'string' ? org : str((org as { name?: unknown } | undefined)?.name),
+    );
+    return found(title, company, clean(placeOf(posting.jobLocation)) ?? '');
+  }
+  return null;
+}
+
+// ---- Thai job boards: we only read the one page the user sent us (like a chat link preview).
+
+const SLOGAN = 'งาน หางาน สมัครงาน';
+
+function fromJobThai(html: string, meta: HtmlMeta): Found | null {
+  // Description: "งาน {company} ตำแหน่งงาน {position}" — the most reliable source.
+  const d = meta.description && /^งาน\s+(.+?)\s+ตำแหน่งงาน\s+(.+?)\s*$/.exec(meta.description);
+  if (d) return found(d[2]!, d[1]!);
+  const t = meta.title ?? '';
+  // /th/company/job/{id}: "งาน หางาน สมัครงาน {company} | {position} - JobThai"
+  const a = new RegExp(`^${SLOGAN}\\s+(.+?)\\s+\\|\\s+(.+?)\\s+-\\s+JobThai$`, 'i').exec(t);
+  if (a) return found(a[2]!, a[1]!);
+  // /th/job/{id}: "{position} | {company} งาน หางาน สมัครงาน - JobThai"
+  const b = new RegExp(`^(.+?)\\s+\\|\\s+(.+?)\\s+${SLOGAN}\\s+-\\s+JobThai$`, 'i').exec(t);
+  if (b) return found(b[1]!, b[2]!);
+  return jobPostingFromHtml(html);
+}
+
+function fromJobsDb(html: string, meta: HtmlMeta): Found | null {
+  const body = html.slice(0, 1_000_000);
+  const tagText = (attr: string) =>
+    clean(
+      new RegExp(`data-automation="${attr}"[^>]*>(?:\\s*<[^>]+>)*\\s*([^<]+)<`).exec(body)?.[1],
+    );
+  let company = tagText('advertiser-name');
+  const jsonCompany = /"companyName"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(body)?.[1];
+  if (!company && jsonCompany) {
+    const decoded = parseLenient(`"${jsonCompany}"`);
+    company = clean(typeof decoded === 'string' ? decoded : null);
+  }
+  // og:title: "{position} Job in {location} - Jobsdb"
+  const og = meta.title ? /^(.+?) Job in (.+?)\s+-\s+Jobsdb\b.*$/i.exec(meta.title) : null;
+  const title = tagText('job-detail-title') ?? og?.[1] ?? null;
+  if (title) return found(title, company, og?.[2] ?? '');
+  return jobPostingFromHtml(html);
+}
+
+function fromJobBkk(html: string, meta: HtmlMeta): Found | null {
+  const ld = jobPostingFromHtml(html);
+  if (ld?.company) return ld;
+  // "{position} | {company} งาน หางาน สมัครงาน - jobbkk.com"
+  const t = meta.title
+    ? new RegExp(`^(.+?)\\s+\\|\\s+(.+?)\\s+${SLOGAN}.*jobbkk`, 'i').exec(meta.title)
+    : null;
+  if (t) return found(t[1]!, t[2]!);
+  return ld;
+}
+
+const SITE_RULES: { host: RegExp; read: (html: string, meta: HtmlMeta) => Found | null }[] = [
+  { host: /(^|\.)jobthai\.com$/i, read: fromJobThai },
+  { host: /(^|\.)jobsdb\.com$/i, read: fromJobsDb },
+  { host: /(^|\.)jobbkk\.com$/i, read: fromJobBkk },
+];
 
 /** Page titles that tell us nothing about the job (login walls, bot checks...). */
 const USELESS_TITLE =
@@ -236,26 +378,56 @@ const USELESS_TITLE =
 /** Job boards whose site name isn't the hiring company. */
 const JOB_BOARDS = /linkedin|jobsdb|jobthai|indeed|glassdoor|jobtopgun|jobbkk|seek|workday/i;
 
+/**
+ * A job board's own slogan rather than a posting ("JobThai - งาน หางาน สมัครงาน หาคน กว่า 200
+ * อาชีพ…"): what a home page, search page or removed posting shows.
+ */
+const GENERIC_BOARD_TITLE =
+  /^(jobthai|jobsdb|jobbkk|jobtopgun|indeed|linkedin)\b|^หางาน|หางาน\s*สมัครงาน|job ?search|find jobs/i;
+
+/**
+ * True when a saved link job still has a board's whole page title instead of a position and a
+ * company (saved before the site rules existed), so it is worth reading the link again.
+ */
+export function looksUnsplit(job: { title: string; company: string; board: string }): boolean {
+  if (!JOB_BOARDS.test(job.board)) return false;
+  return (
+    GENERIC_BOARD_TITLE.test(job.title) ||
+    /\s-\s(JobThai|Jobsdb)\b|jobbkk\.com/i.test(job.title) ||
+    job.company === job.board
+  );
+}
+
+/** Title for a link job whose page we couldn't read; the user is asked to rename it. */
+export const placeholderTitle = (host: string) => `งานจาก ${host}`;
+
 export function hostLabel(url: string): string {
   return new URL(url).hostname.replace(/^www\./, '');
 }
 
-export function previewFromHtml(page: FetchedPage): Omit<LinkPreview, 'url'> {
-  const { title: rawTitle, siteName } = parseHtmlMeta(page.html);
+export function previewFromHtml(page: FetchedPage): Found {
+  const meta = parseHtmlMeta(page.html);
+  const { title: rawTitle, siteName } = meta;
   const empty = { location: '', department: null, workplace: null };
+
+  let host = '';
+  try {
+    host = new URL(page.url).hostname;
+  } catch {
+    // no host: generic rules only
+  }
+  const rule = SITE_RULES.find((r) => r.host.test(host));
+  if (rule) {
+    const hit = rule.read(page.html, meta);
+    if (hit?.title) return hit;
+  }
 
   // LinkedIn: "Acme hiring Data Analyst in Bangkok, Thailand | LinkedIn"
   const li = rawTitle && /^(.+?) hiring (.+?) in (.+?)(?:\s*\|\s*LinkedIn)?$/i.exec(rawTitle);
-  if (li) {
-    const location = cleanLocation(li[3]!);
-    return {
-      title: li[2]!.trim(),
-      company: li[1]!.trim(),
-      location,
-      department: null,
-      workplace: workplaceFromText(location),
-    };
-  }
+  if (li) return found(li[2]!, li[1]!, li[3]!);
+
+  const ld = jobPostingFromHtml(page.html);
+  if (ld) return ld;
 
   let title = rawTitle;
   if (title && siteName) {
@@ -265,7 +437,13 @@ export function previewFromHtml(page: FetchedPage): Omit<LinkPreview, 'url'> {
       title = parts.slice(0, -1).join(' - ');
     }
   }
-  if (title && (USELESS_TITLE.test(title) || title.toLowerCase() === siteName?.toLowerCase())) {
+  const onBoard = JOB_BOARDS.test(host) || (siteName !== null && JOB_BOARDS.test(siteName));
+  if (
+    title &&
+    (USELESS_TITLE.test(title) ||
+      title.toLowerCase() === siteName?.toLowerCase() ||
+      (onBoard && GENERIC_BOARD_TITLE.test(title)))
+  ) {
     title = null;
   }
   const company = siteName && !JOB_BOARDS.test(siteName) ? siteName : null;

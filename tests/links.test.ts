@@ -4,7 +4,9 @@ import {
   canonicalUrl,
   createLinkPreviewer,
   decodeEntities,
+  extractAllUrls,
   extractUrl,
+  looksUnsplit,
   previewFromHtml,
 } from '../src/links/preview.js';
 import { assertFetchable, isPublicAddress } from '../src/links/safeFetch.js';
@@ -102,8 +104,150 @@ describe('previewFromHtml', () => {
     expect(p).toMatchObject({ title: null, company: null });
   });
 
+  it('reads JSON-LD JobPosting on any site', () => {
+    const ld = JSON.stringify({
+      '@context': 'https://schema.org',
+      '@graph': [
+        { '@type': 'WebPage' },
+        {
+          '@type': 'JobPosting',
+          title: 'Data Engineer ',
+          hiringOrganization: { '@type': 'Organization', name: 'Acme Co., Ltd.' },
+          jobLocation: { address: { addressLocality: 'Bangkok', addressRegion: 'Bangkok' } },
+        },
+      ],
+    });
+    const p = previewFromHtml(
+      page(`<title>Careers</title><script type="application/ld+json">${ld}</script>`),
+    );
+    expect(p).toMatchObject({ title: 'Data Engineer', company: 'Acme Co., Ltd.' });
+    expect(p.location).toContain('Bangkok');
+  });
+
   it('decodes entities', () => {
     expect(decodeEntities('A &#38; B &#x2013; C &nbsp;')).toBe('A & B – C  ');
+  });
+});
+
+describe('Thai job boards', () => {
+  const at = (url: string, head: string, body = '') => ({
+    url,
+    html: `<html><head>${head}</head><body>${body}</body></html>`,
+  });
+
+  it('JobThai: reads position and company from the description', () => {
+    const p = previewFromHtml(
+      at(
+        'https://www.jobthai.com/th/company/job/1234567',
+        '<title>งาน หางาน สมัครงาน บริษัท เอบีซี จำกัด | เจ้าหน้าที่บัญชี - JobThai</title>' +
+          '<meta name="description" content="งาน บริษัท เอบีซี จำกัด ตำแหน่งงาน เจ้าหน้าที่บัญชี">',
+      ),
+    );
+    expect(p).toMatchObject({ title: 'เจ้าหน้าที่บัญชี', company: 'บริษัท เอบีซี จำกัด' });
+  });
+
+  it('JobThai: falls back to either title layout', () => {
+    expect(
+      previewFromHtml(
+        at(
+          'https://www.jobthai.com/th/company/job/1',
+          '<title>งาน หางาน สมัครงาน บริษัท เอบีซี จำกัด | Data Analyst - JobThai</title>',
+        ),
+      ),
+    ).toMatchObject({ title: 'Data Analyst', company: 'บริษัท เอบีซี จำกัด' });
+    expect(
+      previewFromHtml(
+        at(
+          'https://www.jobthai.com/th/job/2',
+          '<title>Data Analyst | บริษัท เอบีซี จำกัด งาน หางาน สมัครงาน - JobThai</title>',
+        ),
+      ),
+    ).toMatchObject({ title: 'Data Analyst', company: 'บริษัท เอบีซี จำกัด' });
+  });
+
+  it("JobThai: the site's slogan is not a job title", () => {
+    const p = previewFromHtml(
+      at(
+        'https://www.jobthai.com/th/jobs',
+        '<title>JobThai - งาน หางาน สมัครงาน หาคน กว่า 200 อาชีพ อัปเดตทุกวัน จากบริษัทชั้นนำ</title>' +
+          '<meta property="og:site_name" content="JobThai">',
+      ),
+    );
+    expect(p).toMatchObject({ title: null, company: null });
+  });
+
+  it('JobsDB: reads the advertiser and the job title', () => {
+    const p = previewFromHtml(
+      at(
+        'https://th.jobsdb.com/job/80000000',
+        '<meta property="og:title" content="Sales Executive Job in Bang Na, Bangkok - Jobsdb">' +
+          '<meta property="og:site_name" content="Jobsdb Thailand">',
+        '<h1 data-automation="job-detail-title" class="x"><span>Sales Executive</span></h1>' +
+          '<span data-automation="advertiser-name" class="y">Maison Royal Co., Ltd.</span>',
+      ),
+    );
+    expect(p).toMatchObject({ title: 'Sales Executive', company: 'Maison Royal Co., Ltd.' });
+    expect(p.location).toContain('Bangkok');
+  });
+
+  it('JobsDB: uses companyName and og:title when the markup differs', () => {
+    const p = previewFromHtml(
+      at(
+        'https://th.jobsdb.com/job/1',
+        '<meta property="og:title" content="QA Engineer Job in Bangkok - Jobsdb">',
+        '<script>window.x={"companyName":"Acme \\"Thai\\" Co."}</script>',
+      ),
+    );
+    expect(p).toMatchObject({ title: 'QA Engineer', company: 'Acme "Thai" Co.' });
+  });
+
+  it('JobBKK: reads JSON-LD even with raw newlines inside strings', () => {
+    const ld =
+      '{"@context":"https://schema.org","@type":"JobPosting","title":"พนักงานขาย ",' +
+      '"description":"line one\nline two","hiringOrganization":{"@type":"Organization","name":"บริษัท ดีดี จำกัด"}}';
+    const p = previewFromHtml(
+      at(
+        'https://www.jobbkk.com/jobs/detailurgent/1/2',
+        '<meta property="og:site_name" content="JOBBKK.COM">' +
+          `<script type="application/ld+json">${ld}</script>`,
+      ),
+    );
+    expect(p).toMatchObject({ title: 'พนักงานขาย', company: 'บริษัท ดีดี จำกัด' });
+  });
+
+  it('JobBKK: falls back to the title', () => {
+    const p = previewFromHtml(
+      at(
+        'https://www.jobbkk.com/jobs/detailurgent/1/2',
+        '<meta property="og:title" content="พนักงานขาย | บริษัท ดีดี จำกัด งาน หางาน สมัครงาน - jobbkk.com">',
+      ),
+    );
+    expect(p).toMatchObject({ title: 'พนักงานขาย', company: 'บริษัท ดีดี จำกัด' });
+  });
+
+  it('spots link jobs saved with a whole board title', () => {
+    const board = 'jobthai.com';
+    expect(
+      looksUnsplit({
+        board,
+        company: board,
+        title: 'JobThai - งาน หางาน สมัครงาน หาคน กว่า 200 อาชีพ',
+      }),
+    ).toBe(true);
+    expect(looksUnsplit({ board, company: 'บริษัท เอบีซี จำกัด', title: 'Data Analyst' })).toBe(
+      false,
+    );
+    expect(looksUnsplit({ board: 'acme.com', company: 'acme.com', title: 'x' })).toBe(false);
+  });
+});
+
+describe('extractAllUrls', () => {
+  it('keeps repeats so they can be reported', () => {
+    expect(extractAllUrls('https://a.co/1 https://a.co/1, https://b.co')).toEqual([
+      'https://a.co/1',
+      'https://a.co/1',
+      'https://b.co',
+    ]);
   });
 });
 

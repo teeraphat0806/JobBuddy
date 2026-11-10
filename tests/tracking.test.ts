@@ -77,7 +77,21 @@ describe('adding a job by link', () => {
     const id = bot.addJob({ title: 'QA', url: 'https://x.example/qa' });
     await bot.tap({ a: 'job', v: 'apply', j: id });
     const reply = await bot.say('https://x.example/qa');
-    expect(reply[0]).toContain('ที่สมัครไว้ อยู่แล้ว');
+    expect(reply).toHaveLength(1); // no card: it's a duplicate
+    expect(reply[0]).toContain('ลิงก์นี้ซ้ำ');
+    expect(reply[0]).toContain('ที่สมัครไว้');
+    expect(reply[0]).toContain('ไม่ได้บันทึกซ้ำ');
+    expect(bot.userJobRows.get(`${userId(bot)}:${id}`)?.status).toBe('applied');
+  });
+
+  it('reports a link the user already saved as a duplicate', async () => {
+    const bot = await readyBot();
+    await bot.say('https://x.example/1');
+    const again = await bot.say('https://x.example/1?utm_source=line');
+    expect(again).toHaveLength(1);
+    expect(again[0]).toContain('ลิงก์นี้ซ้ำ');
+    expect(again[0]).toContain('ที่เก็บไว้');
+    expect([...bot.jobRows.values()].filter((j) => j.provider === LINK_PROVIDER)).toHaveLength(1);
   });
 
   it('asks for the title when the page gives none, and renames the job', async () => {

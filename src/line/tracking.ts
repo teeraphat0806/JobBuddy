@@ -6,7 +6,7 @@ import {
   type UserJobEntry,
   type UserJobRepository,
 } from '../jobs/repository.js';
-import { canonicalUrl, hostLabel, type LinkPreviewer } from '../links/preview.js';
+import { canonicalUrl, hostLabel, placeholderTitle, type LinkPreviewer } from '../links/preview.js';
 import type { NoteRepository } from '../notes/repository.js';
 import { jobBubble, jobCarousel, type CardJob } from './jobCards.js';
 import type { OutgoingMessage } from './messenger.js';
@@ -62,8 +62,6 @@ const notFound = () => [text('ไม่พบงานนี้แล้วค�
 
 export const MAX_LINKS_PER_MESSAGE = 10;
 const LINK_CONCURRENCY = 4;
-const PLACEHOLDER_PREFIX = 'งานจาก ';
-const placeholderTitle = (host: string) => `${PLACEHOLDER_PREFIX}${host}`;
 const isPlaceholder = (job: Job) =>
   job.provider === LINK_PROVIDER && job.title === placeholderTitle(job.board);
 const cannotRename = (job: Job) =>
@@ -108,14 +106,14 @@ export function createTracking(deps: TrackingDeps) {
     });
   }
 
-  type SavedLink =
-    | { kind: 'invalid'; raw: string }
-    | {
-        kind: 'new' | 'saved' | 'applied';
-        job: Job;
-        entry: UserJobEntry;
-        needsTitle: boolean;
-      };
+  interface TrackedLink {
+    /** 'new' = just saved; 'saved' / 'applied' = was already in that list (a duplicate). */
+    kind: 'new' | 'saved' | 'applied';
+    job: Job;
+    entry: UserJobEntry;
+    needsTitle: boolean;
+  }
+  type SavedLink = { kind: 'invalid'; raw: string } | TrackedLink;
 
   /** Find or create the job behind one link and make sure it's in the user's list. */
   async function saveLink(user: User, rawUrl: string): Promise<SavedLink> {
@@ -155,20 +153,34 @@ export function createTracking(deps: TrackingDeps) {
   const invalidLinkText =
     'ลิงก์นี้ใช้ไม่ได้ครับ 😅 ต้องขึ้นต้นด้วย http:// หรือ https:// และยาวไม่เกิน 1000 ตัวอักษร';
 
+  /** Where an already-tracked job lives, e.g. "⭐ ที่เก็บไว้". */
+  const whereIs = (entry: UserJobEntry) =>
+    entry.status === 'applied'
+      ? `📋 ที่สมัครไว้ (สถานะ: ${STAGE_LABEL[entry.stage ?? 'applied']})`
+      : '⭐ ที่เก็บไว้';
+
   /** The user sent a link: save the job and show it as a card. */
   async function addLink(user: User, rawUrl: string): Promise<OutgoingMessage[]> {
     const saved = await saveLink(user, rawUrl);
     if (saved.kind === 'invalid') return [text(invalidLinkText)];
     const { job, entry } = saved;
 
-    const heading =
-      saved.kind === 'applied'
-        ? `งานนี้อยู่ใน 📋 ที่สมัครไว้ อยู่แล้วครับ\nสถานะ: ${STAGE_LABEL[entry.stage ?? 'applied']}`
-        : saved.kind === 'saved'
-          ? 'งานนี้อยู่ใน ⭐ ที่เก็บไว้ อยู่แล้วครับ'
-          : '📥 บันทึกงานจากลิงก์ไว้ใน ⭐ ที่เก็บไว้ แล้วครับ\nถ้าสมัครแล้ว กด ✅ สมัครแล้ว ที่การ์ดได้เลย';
+    if (saved.kind !== 'new') {
+      // Already in one of their lists: say so, and don't save it a second time.
+      return [
+        text(
+          `🔁 ลิงก์นี้ซ้ำครับ งานนี้อยู่ใน ${whereIs(entry)} อยู่แล้ว เลยไม่ได้บันทึกซ้ำ\n\n${nameOf(job)}`,
+          [detailButton(job), entry.status === 'applied' ? appliedListButton : savedListButton],
+        ),
+      ];
+    }
 
-    const out = [text(heading), await card(user, job, entry)];
+    const out = [
+      text(
+        '📥 บันทึกงานจากลิงก์ไว้ใน ⭐ ที่เก็บไว้ แล้วครับ\nถ้าสมัครแล้ว กด ✅ สมัครแล้ว ที่การ์ดได้เลย',
+      ),
+      await card(user, job, entry),
+    ];
     if (saved.needsTitle) {
       await sessions.set(user.id, LINK_TITLE_FLOW, { jobId: job.id }, FLOW_TTL_MS);
       out.push(
@@ -181,29 +193,67 @@ export function createTracking(deps: TrackingDeps) {
     return out;
   }
 
-  /** Several links in one message: save them all, then summarise. */
+  /**
+   * Several links in one message: save the new ones and report the rest. A link is a duplicate
+   * when the job is already in the user's lists, or appears earlier in the same message (the
+   * same URL, a tracking variant of it, or another link to the same posting).
+   */
   async function addLinks(user: User, rawUrls: string[]): Promise<OutgoingMessage[]> {
     const urls = rawUrls.slice(0, MAX_LINKS_PER_MESSAGE);
+
+    // Repeats of a URL earlier in the message are skipped before fetching anything.
+    const seenUrls = new Set<string>();
+    const toSave: string[] = [];
+    let repeatedInMessage = 0;
+    for (const raw of urls) {
+      const key = canonicalUrl(raw) ?? raw;
+      if (seenUrls.has(key)) {
+        repeatedInMessage++;
+        continue;
+      }
+      seenUrls.add(key);
+      toSave.push(raw);
+    }
+
     const results: SavedLink[] = [];
     // A few at a time: link previews hit other people's websites.
-    for (let i = 0; i < urls.length; i += LINK_CONCURRENCY) {
-      const batch = urls.slice(i, i + LINK_CONCURRENCY);
+    for (let i = 0; i < toSave.length; i += LINK_CONCURRENCY) {
+      const batch = toSave.slice(i, i + LINK_CONCURRENCY);
       results.push(...(await Promise.all(batch.map((u) => saveLink(user, u)))));
     }
 
-    const ok = results.filter((r) => r.kind !== 'invalid');
-    // The same job can come from two different links (e.g. tracking variants).
-    const unique = [...new Map(ok.map((r) => [r.job.id, r])).values()];
-    const added = unique.filter((r) => r.kind === 'new');
-    const already = unique.length - added.length;
-    const invalid = results.length - ok.length;
-    const untitled = unique.filter((r) => r.needsTitle).length;
+    const added: TrackedLink[] = [];
+    const already: TrackedLink[] = [];
+    const seenJobs = new Set<string>();
+    let invalid = 0;
+    for (const r of results) {
+      if (r.kind === 'invalid') {
+        invalid++;
+      } else if (seenJobs.has(r.job.id)) {
+        repeatedInMessage++; // two different links to the same posting
+      } else {
+        seenJobs.add(r.job.id);
+        if (r.kind === 'new') added.push(r);
+        else already.push(r);
+      }
+    }
+    const duplicates = already.length + repeatedInMessage;
+    const untitled = added.filter((r) => r.needsTitle).length;
 
-    const lines = [`📥 บันทึกจาก ${results.length} ลิงก์`];
-    if (added.length) lines.push(`✅ เพิ่มใหม่ ${added.length} งาน ใน ⭐ ที่เก็บไว้`);
-    for (const r of added.slice(0, 10)) lines.push(`• ${nameOf(r.job)}`);
-    if (already) lines.push(`↩️ มีอยู่แล้ว ${already} งาน`);
-    if (invalid) lines.push(`⚠️ ใช้ไม่ได้ ${invalid} ลิงก์`);
+    const lines = [`📥 ได้รับ ${urls.length} ลิงก์`];
+    if (added.length) {
+      lines.push(`✅ บันทึกใหม่ ${added.length} งาน ใน ⭐ ที่เก็บไว้`);
+      for (const r of added) lines.push(`• ${nameOf(r.job)}`);
+    } else {
+      lines.push('ไม่มีงานใหม่ให้บันทึกครับ');
+    }
+    if (duplicates) {
+      lines.push('', `🔁 ลิงก์ซ้ำ ${duplicates} ลิงก์ (ไม่ได้บันทึกซ้ำ)`);
+      for (const r of already) lines.push(`• ${nameOf(r.job)} — อยู่ใน ${whereIs(r.entry)} แล้ว`);
+      if (repeatedInMessage)
+        lines.push(`• ส่งลิงก์เดียวกันมาซ้ำในข้อความนี้ ${repeatedInMessage} ลิงก์`);
+    }
+    if (invalid) lines.push('', `⚠️ ใช้ไม่ได้ ${invalid} ลิงก์`);
     if (untitled) {
       lines.push(
         '',
@@ -217,23 +267,22 @@ export function createTracking(deps: TrackingDeps) {
       );
     }
 
-    const out: OutgoingMessage[] = [text(lines.join('\n'), [savedListButton])];
-    if (unique.length) {
-      const counts = await Promise.all(unique.map((r) => notes.count(user.id, r.job.id)));
+    // Keep the summary within LINE's text limit even with long job names.
+    const summary = [...lines.join('\n')].slice(0, LINE_TEXT_MAX).join('');
+    const out: OutgoingMessage[] = [text(summary, [savedListButton])];
+    if (added.length) {
+      // Cards only for what was just saved; duplicates are already in the user's lists.
+      const counts = await Promise.all(added.map((r) => notes.count(user.id, r.job.id)));
       out.push({
         type: 'flex',
-        altText: `บันทึกงานจากลิงก์ ${unique.length} งาน`,
+        altText: `บันทึกงานจากลิงก์ ${added.length} งาน`,
         contents: {
           type: 'carousel',
-          contents: unique
-            .slice(0, 12)
-            .map((r, i) =>
-              jobBubble(
-                { ...r.job, stage: r.entry.stage, noteCount: counts[i] ?? 0 },
-                r.entry.status === 'applied' ? 'applied' : 'saved',
-                { addFriendUrl: deps.getAddFriendUrl?.() },
-              ),
-            ),
+          contents: added.slice(0, 12).map((r, i) =>
+            jobBubble({ ...r.job, stage: r.entry.stage, noteCount: counts[i] ?? 0 }, 'saved', {
+              addFriendUrl: deps.getAddFriendUrl?.(),
+            }),
+          ),
         },
       });
     }

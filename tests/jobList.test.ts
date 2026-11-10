@@ -51,8 +51,9 @@ describe('many links in one message', () => {
     const reply = await bot.say(
       'สมัครพวกนี้\nhttps://a.example/1\nhttps://b.example/2 และ https://c.example/3',
     );
-    expect(reply[0]).toContain('บันทึกจาก 3 ลิงก์');
-    expect(reply[0]).toContain('เพิ่มใหม่ 3 งาน');
+    expect(reply[0]).toContain('ได้รับ 3 ลิงก์');
+    expect(reply[0]).toContain('บันทึกใหม่ 3 งาน');
+    expect(reply[0]).not.toContain('ซ้ำ');
     expect(reply[1]).toBe('[flex]');
     const carousel = (bot.lastReply()[1] as messagingApi.FlexMessage)
       .contents as messagingApi.FlexCarousel;
@@ -71,19 +72,51 @@ describe('many links in one message', () => {
     const reply = await bot.say(
       `https://known.example/job https://new.example/1 https://new.example/1 https://x.example/${'a'.repeat(1100)}`,
     );
-    expect(reply[0]).toContain('บันทึกจาก 3 ลิงก์'); // the duplicate is dropped up front
-    expect(reply[0]).toContain('เพิ่มใหม่ 1 งาน');
-    expect(reply[0]).toContain('มีอยู่แล้ว 1 งาน');
+    expect(reply[0]).toContain('ได้รับ 4 ลิงก์');
+    expect(reply[0]).toContain('บันทึกใหม่ 1 งาน');
+    expect(reply[0]).toContain('ลิงก์ซ้ำ 2 ลิงก์ (ไม่ได้บันทึกซ้ำ)');
+    expect(reply[0]).toContain('Known');
+    expect(reply[0]).toContain('ซ้ำในข้อความนี้ 1 ลิงก์');
     expect(reply[0]).toContain('ใช้ไม่ได้ 1 ลิงก์');
+    // The repeated link is never fetched twice.
+    expect(bot.previewLink).toHaveBeenCalledTimes(1);
     // An applied job is not downgraded by being sent again.
     expect(bot.userJobRows.get(`${userId(bot)}:${known}`)?.status).toBe('applied');
+    // Cards only for what was just saved.
+    const carousel = (bot.lastReply()[1] as messagingApi.FlexMessage)
+      .contents as messagingApi.FlexCarousel;
+    expect(carousel.contents).toHaveLength(1);
+  });
+
+  it('skips one duplicate out of ten and saves the other nine', async () => {
+    const bot = await readyBot();
+    await bot.say('https://x.example/3');
+    const links = Array.from({ length: 10 }, (_, i) => `https://x.example/${i}`).join('\n');
+    const reply = await bot.say(links);
+    expect(reply[0]).toContain('ได้รับ 10 ลิงก์');
+    expect(reply[0]).toContain('บันทึกใหม่ 9 งาน');
+    expect(reply[0]).toContain('ลิงก์ซ้ำ 1 ลิงก์');
+    const carousel = (bot.lastReply()[1] as messagingApi.FlexMessage)
+      .contents as messagingApi.FlexCarousel;
+    expect(carousel.contents).toHaveLength(9);
+    const saved = [...bot.userJobRows.entries()].filter(([k]) => k.startsWith(`${userId(bot)}:`));
+    expect(saved).toHaveLength(10);
+  });
+
+  it('sends no cards when every link is a duplicate', async () => {
+    const bot = await readyBot();
+    await bot.say('https://x.example/1 https://x.example/2');
+    const reply = await bot.say('https://x.example/1 https://x.example/2');
+    expect(reply).toHaveLength(1);
+    expect(reply[0]).toContain('ไม่มีงานใหม่');
+    expect(reply[0]).toContain('ลิงก์ซ้ำ 2 ลิงก์');
   });
 
   it(`stops at ${MAX_LINKS_PER_MESSAGE} links`, async () => {
     const bot = await readyBot();
     const links = Array.from({ length: 12 }, (_, i) => `https://x.example/${i}`).join(' ');
     const reply = await bot.say(links);
-    expect(reply[0]).toContain(`บันทึกจาก ${MAX_LINKS_PER_MESSAGE} ลิงก์`);
+    expect(reply[0]).toContain(`ได้รับ ${MAX_LINKS_PER_MESSAGE} ลิงก์`);
     expect(reply[0]).toContain('ส่งที่เหลือมาอีกข้อความ');
     expect(bot.previewLink).toHaveBeenCalledTimes(MAX_LINKS_PER_MESSAGE);
   });

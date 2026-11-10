@@ -44,6 +44,8 @@ export interface JobRepository {
   /** Insert a user-submitted job, or return the existing one for the same link. */
   createLinkJob(input: LinkJobInput): Promise<Job>;
   rename(id: string, title: string, company?: string): Promise<void>;
+  /** Every job users added by link (for occasional maintenance). */
+  listLinkJobs(): Promise<Job[]>;
   lastSyncedAt(): Promise<Date | null>;
 }
 
@@ -151,6 +153,8 @@ export function createJobRepository(db: Db): JobRepository {
         .set(company ? { title, company } : { title })
         .where(eq(jobs.id, id));
     },
+
+    listLinkJobs: () => db.select().from(jobs).where(eq(jobs.provider, LINK_PROVIDER)),
 
     async lastSyncedAt() {
       const [row] = await db.select({ at: max(jobs.lastSeenAt) }).from(jobs);

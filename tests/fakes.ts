@@ -125,6 +125,7 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
       const j = jobRows.get(id);
       if (j) Object.assign(j, company ? { title, company } : { title });
     },
+    listLinkJobs: async () => [...jobRows.values()].filter((j) => j.provider === LINK_PROVIDER),
     lastSyncedAt: async () => null,
   };
 
@@ -336,6 +337,7 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
     linkPreview,
     previewLink,
     addJob,
+    jobs,
     line,
     handle,
     lastReply,

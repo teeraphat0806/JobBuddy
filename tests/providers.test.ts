@@ -205,6 +205,7 @@ describe('runJobSync', () => {
         throw new Error('unused');
       }),
       rename: vi.fn(async () => {}),
+      listLinkJobs: vi.fn(async () => []),
       lastSyncedAt: vi.fn(async () => null),
     } satisfies JobRepository;
   }
