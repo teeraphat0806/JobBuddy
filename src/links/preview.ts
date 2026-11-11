@@ -1,5 +1,14 @@
 import { cleanLocation, workplaceFromText } from '../jobs/location.js';
-import { getJson, LEVER_WORKPLACE, str, USER_AGENT, type Fetch } from '../jobs/providers.js';
+import {
+  breezyFeedUrl,
+  breezyThaiPlace,
+  getJson,
+  LEVER_WORKPLACE,
+  str,
+  USER_AGENT,
+  type BreezyJob,
+  type Fetch,
+} from '../jobs/providers.js';
 import type { Provider, Workplace } from '../jobs/types.js';
 import { JOB_SOURCES } from '../jobs/sources.js';
 import { safeFetchHtml, type FetchedPage } from './safeFetch.js';
@@ -97,6 +106,12 @@ export function atsRefOf(rawUrl: string): AtsRef | null {
     const id = /^(\d+)/.exec(parts[1]!)?.[1];
     if (id) return { provider: 'smartrecruiters', board: parts[0]!, id };
   }
+  // {board}.breezy.hr/p/{id}-{slug}
+  const breezy = /^([a-z0-9-]+)\.breezy\.hr$/.exec(host);
+  if (breezy && breezy[1] !== 'app' && parts[0] === 'p' && parts[1]) {
+    const id = /^([0-9a-f]+)(?:-|$)/i.exec(parts[1])?.[1];
+    if (id) return { provider: 'breezy', board: breezy[1]!, id };
+  }
   return null;
 }
 
@@ -183,6 +198,24 @@ async function fetchAtsDetails(ref: AtsRef, fetchImpl: Fetch): Promise<AtsDetail
         location,
         department: str(j?.department),
         workplace: j?.telecommuting ? 'remote' : workplaceFromText(location),
+      };
+    }
+    case 'breezy': {
+      // The public feed lists every open job; pick the one the link points at.
+      const body = await getJson(fetchImpl, breezyFeedUrl(ref.board));
+      const j = Array.isArray(body)
+        ? (body as BreezyJob[]).find((x) => x.id === ref.id)
+        : undefined;
+      const place = j ? (breezyThaiPlace(j) ?? j.location ?? null) : null;
+      const location = place
+        ? cleanLocation([place.city, place.country?.name].filter(Boolean).join(', '))
+        : '';
+      return {
+        title: str(j?.name),
+        company: str(j?.company?.name) ?? knownCompany(ref),
+        location,
+        department: str(j?.department),
+        workplace: place?.is_remote ? 'remote' : workplaceFromText(location),
       };
     }
   }

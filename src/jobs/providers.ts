@@ -227,6 +227,68 @@ export async function fetchWorkable(source: JobSource, fetchImpl: Fetch): Promis
   });
 }
 
+// ---- Breezy: GET {board}.breezy.hr/json (the public feed behind each careers page)
+
+export interface BreezyPlace {
+  country?: { id?: string; name?: string };
+  city?: string;
+  name?: string;
+  is_remote?: boolean;
+}
+
+export interface BreezyJob {
+  id?: string;
+  name?: string;
+  url?: string;
+  published_date?: string;
+  department?: string;
+  company?: { name?: string };
+  location?: BreezyPlace;
+  locations?: BreezyPlace[];
+}
+
+export const breezyFeedUrl = (board: string) =>
+  `https://${encodeURIComponent(board)}.breezy.hr/json`;
+
+/** The posting's place in Thailand, if it has one. */
+export function breezyThaiPlace(j: BreezyJob): BreezyPlace | null {
+  const places = j.locations?.length ? j.locations : j.location ? [j.location] : [];
+  return (
+    places.find(
+      (p) =>
+        p.country?.id?.toUpperCase() === 'TH' ||
+        isInThailand(`${p.name ?? ''} ${p.country?.name ?? ''}`),
+    ) ?? null
+  );
+}
+
+export const breezyLocation = (p: BreezyPlace) =>
+  cleanLocation([p.city, p.country?.name ?? 'Thailand'].filter(Boolean).join(', '));
+
+export async function fetchBreezy(source: JobSource, fetchImpl: Fetch): Promise<JobListing[]> {
+  const body = await getJson(fetchImpl, breezyFeedUrl(source.board));
+  if (!Array.isArray(body)) throw new Error(`unexpected Breezy feed for ${source.board}`);
+  return (body as BreezyJob[]).flatMap((j) => {
+    const thai = breezyThaiPlace(j);
+    if (!thai || !str(j.id) || !str(j.name) || !str(j.url)) return [];
+    const location = breezyLocation(thai);
+    return [
+      {
+        provider: 'breezy' as const,
+        board: source.board,
+        externalId: j.id!,
+        company: str(j.company?.name) ?? source.company,
+        title: j.name!.trim(),
+        location: location || 'Thailand',
+        department: str(j.department),
+        workplace: thai.is_remote ? 'remote' : workplaceFromText(location),
+        url: j.url!,
+        postedAt: date(j.published_date),
+      },
+    ];
+  });
+}
+
 export function fetchSource(source: JobSource, fetchImpl: Fetch = fetch): Promise<JobListing[]> {
   switch (source.provider) {
     case 'greenhouse':
@@ -237,5 +299,7 @@ export function fetchSource(source: JobSource, fetchImpl: Fetch = fetch): Promis
       return fetchSmartRecruiters(source, fetchImpl);
     case 'workable':
       return fetchWorkable(source, fetchImpl);
+    case 'breezy':
+      return fetchBreezy(source, fetchImpl);
   }
 }

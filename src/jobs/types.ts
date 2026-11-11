@@ -1,4 +1,4 @@
-export type Provider = 'greenhouse' | 'lever' | 'smartrecruiters' | 'workable';
+export type Provider = 'greenhouse' | 'lever' | 'smartrecruiters' | 'workable' | 'breezy';
 export type Workplace = 'onsite' | 'hybrid' | 'remote';
 
 /** A job board we pull from: one company on one ATS provider. */

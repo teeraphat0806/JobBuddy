@@ -1,6 +1,7 @@
 # Data sources
 
-- **Synced feed**: public ATS APIs only (Greenhouse, Lever, SmartRecruiters, Workable widget).
+- **Synced feed**: public ATS APIs only (Greenhouse, Lever, SmartRecruiters, Workable widget, Breezy `{board}.breezy.hr/json` careers feed).
+  - Lever and SmartRecruiters board names are case-sensitive (e.g. Lever `Coda`).
   - We keep Thailand jobs only and store a summary that links back to the posting.
   - To add a company, first confirm that its board has Thai jobs.
   - Workable sits behind Cloudflare rate limits (429/1015), so don't hammer it while testing.

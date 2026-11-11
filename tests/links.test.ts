@@ -63,6 +63,15 @@ describe('atsRefOf', () => {
     });
   });
 
+  it('recognises Breezy postings', () => {
+    expect(atsRefOf('https://sunday.breezy.hr/p/fc69bbb18398-broker-manager?src=x')).toEqual({
+      provider: 'breezy',
+      board: 'sunday',
+      id: 'fc69bbb18398',
+    });
+    expect(atsRefOf('https://sunday.breezy.hr/')).toBeNull();
+  });
+
   it('returns null for other sites', () => {
     expect(atsRefOf('https://www.jobsdb.com/th/job/123')).toBeNull();
   });

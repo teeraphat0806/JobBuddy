@@ -43,4 +43,7 @@ export const JOB_SOURCES: JobSource[] = [
   { provider: 'workable', board: '2c2p', company: '2C2P' },
   { provider: 'workable', board: 'fundingsocieties', company: 'Funding Societies' },
   { provider: 'workable', board: 'datawow', company: 'Data Wow' },
+  // Breezy
+  { provider: 'breezy', board: 'sunday', company: 'Sunday' },
+  { provider: 'breezy', board: 'flowaccount', company: 'FlowAccount' },
 ];

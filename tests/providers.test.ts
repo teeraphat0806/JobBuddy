@@ -3,6 +3,7 @@ import {
   fetchGreenhouse,
   fetchLever,
   fetchSmartRecruiters,
+  fetchBreezy,
   fetchWorkable,
   type Fetch,
 } from '../src/jobs/providers.js';
@@ -189,6 +190,60 @@ describe('fetchWorkable', () => {
       url: 'https://apply.workable.com/j/ABC123',
     });
     expect(jobs[1]).toMatchObject({ workplace: 'remote', location: 'Thailand' });
+  });
+});
+
+describe('fetchBreezy', () => {
+  it('keeps postings with a place in Thailand', async () => {
+    const th = { country: { id: 'TH', name: 'Thailand' }, city: 'Bangkok', name: 'Bangkok, TH' };
+    const f = fakeFetch({
+      'sunday.breezy.hr/json': [
+        {
+          id: 'fc69bbb18398',
+          name: ' Broker Manager ',
+          url: 'https://sunday.breezy.hr/p/fc69bbb18398-broker-manager',
+          published_date: '2026-09-03T10:39:42.701Z',
+          department: 'Sales',
+          company: { name: 'Ice Cream Insurance Broker Co.,Ltd.' },
+          location: th,
+          locations: [th],
+        },
+        {
+          id: 'aa11',
+          name: 'Remote writer',
+          url: 'https://sunday.breezy.hr/p/aa11-remote-writer',
+          locations: [
+            { country: { id: 'ID', name: 'Indonesia' }, city: 'Jakarta' },
+            { country: { id: 'TH', name: 'Thailand' }, is_remote: true },
+          ],
+        },
+        {
+          id: 'bb22',
+          name: 'Jakarta only',
+          url: 'https://sunday.breezy.hr/p/bb22-jakarta-only',
+          location: { country: { id: 'ID', name: 'Indonesia' }, city: 'Jakarta' },
+        },
+      ],
+    });
+    const jobs = await fetchBreezy({ provider: 'breezy', board: 'sunday', company: 'Sunday' }, f);
+    expect(jobs.map((j) => j.externalId)).toEqual(['fc69bbb18398', 'aa11']);
+    expect(jobs[0]).toMatchObject({
+      provider: 'breezy',
+      company: 'Ice Cream Insurance Broker Co.,Ltd.',
+      title: 'Broker Manager',
+      location: 'Bangkok, Thailand',
+      department: 'Sales',
+      url: 'https://sunday.breezy.hr/p/fc69bbb18398-broker-manager',
+    });
+    expect(jobs[0]!.postedAt?.toISOString()).toBe('2026-09-03T10:39:42.701Z');
+    expect(jobs[1]).toMatchObject({ company: 'Sunday', workplace: 'remote', location: 'Thailand' });
+  });
+
+  it('fails the source when the feed is not a list, so its jobs are kept', async () => {
+    const f = fakeFetch({ 'x.breezy.hr/json': { error: 'nope' } });
+    await expect(
+      fetchBreezy({ provider: 'breezy', board: 'x', company: 'X' }, f),
+    ).rejects.toThrow();
   });
 });
 
