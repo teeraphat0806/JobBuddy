@@ -8,6 +8,7 @@
   - Applying never gets downgraded by re-saving the job.
   - Sending a link that is already saved or applied counts as a duplicate: the bot reports it and doesn't save it again.
   - `stage_changed_at` records when the current stage began; the bot shows "N days" in it. It restarts only when the stage actually changes. Each stage offers its likely next steps as buttons (applied -> contacted -> book interview / interviewed -> waiting -> offer / rejected).
+- **Link imports**: a message with more than 10 links is queued (`link_imports`, one batch per message) and saved in the background, one page per site per second. Each user gets one push summary once all their queued links are done; the batches are then deleted. A user can have at most 2,000 queued links.
 - **Places**: up to 5 per user (home, condo...), saved from a shared LINE location. They're used only for straight-line distances to jobs and never sent anywhere.
 - **Geocodes** cache job-location text to coordinates, shared by all users. Province-level matches are stored as "not found", since they say nothing useful about a commute.
 - **Notes** belong to a user and a job.

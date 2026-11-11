@@ -7,6 +7,8 @@ import {
   jobNotes,
   jobPreferences,
   jobs,
+  linkImportBatches,
+  linkImports,
   userJobs,
   userPlaces,
   users,
@@ -23,6 +25,8 @@ export const REQUIRED_TABLES = [
   jobNotes,
   userPlaces,
   geocodes,
+  linkImportBatches,
+  linkImports,
 ].map((t) => getTableName(t));
 
 /** Tables the app needs that don't exist in the `public` schema. */

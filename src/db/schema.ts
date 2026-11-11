@@ -244,3 +244,57 @@ export const geocodes = pgTable('geocodes', {
 });
 
 export type Geocode = typeof geocodes.$inferSelect;
+
+export const linkImportStatus = pgEnum('link_import_status', ['pending', 'working', 'done']);
+export const linkImportOutcome = pgEnum('link_import_outcome', [
+  'new',
+  'duplicate',
+  'invalid',
+  'failed',
+]);
+
+/**
+ * One big message of links (more than a reply can handle in time). Links are saved in the
+ * background and the user gets one push summary once all their links are done.
+ */
+export const linkImportBatches = pgTable(
+  'link_import_batches',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** Links in the message, repeats included. */
+    total: integer('total').notNull(),
+    /** Links that repeated an earlier one in the same message (never queued). */
+    repeated: integer('repeated').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    notifiedAt: timestamp('notified_at', { withTimezone: true }),
+  },
+  (t) => [index('link_import_batches_user_idx').on(t.userId)],
+);
+
+export const linkImports = pgTable(
+  'link_imports',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    batchId: uuid('batch_id')
+      .notNull()
+      .references(() => linkImportBatches.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    url: text('url').notNull(),
+    status: linkImportStatus('status').notNull().default('pending'),
+    outcome: linkImportOutcome('outcome'),
+    jobId: uuid('job_id').references(() => jobs.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    doneAt: timestamp('done_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('link_imports_status_idx').on(t.status, t.createdAt),
+    index('link_imports_batch_idx').on(t.batchId),
+    index('link_imports_user_status_idx').on(t.userId, t.status),
+  ],
+);

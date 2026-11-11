@@ -13,7 +13,10 @@ import { createLineMessenger } from './line/messenger.js';
 import { createInterviewRepository } from './interviews/repository.js';
 import { startReminderScheduler } from './interviews/reminders.js';
 import { createLinkPreviewer } from './links/preview.js';
+import { createLinkImportRepository } from './links/importRepository.js';
+import { createLinkImportWorker } from './links/importWorker.js';
 import { refreshLinkTitles } from './links/refreshTitles.js';
+import { createLinkSaver } from './links/saveLink.js';
 import { createNominatimGeocoder } from './geo/geocoder.js';
 import { createGeocodeRepository } from './geo/repository.js';
 import { createGeoService, createJobDistances } from './geo/service.js';
@@ -43,6 +46,15 @@ const interviews = createInterviewRepository(db);
 const previewLink = createLinkPreviewer();
 const userJobs = createUserJobRepository(db);
 const places = createPlaceRepository(db);
+
+// Messages with many links are saved in the background, then summarised in one push.
+const linkImportRepo = createLinkImportRepository(db);
+const linkImportWorker = createLinkImportWorker({
+  imports: linkImportRepo,
+  saveLink: createLinkSaver({ jobs, userJobs, previewLink }),
+  line,
+  logger,
+});
 
 // Home-to-job distances. Only public job-location text goes to the geocoder, never user data.
 const geo = env.GEOCODING
@@ -84,6 +96,7 @@ const app = createApp({
     places,
     distances,
     warmDistances,
+    linkImports: { repo: linkImportRepo, kick: () => linkImports.kick() },
     timeZone: env.APP_TIMEZONE,
     line,
     logger,
@@ -113,6 +126,9 @@ void refreshLinkTitles({ jobs, previewLink, logger }).catch((err: unknown) =>
   logger.warn('Link title refresh failed', errorFields(err)),
 );
 
+// Also resumes links left in the queue by a restart.
+const linkImports = linkImportWorker.start(30_000);
+
 const stopJobSync = env.JOB_SYNC
   ? startJobSyncScheduler(jobs, JOB_SOURCES, logger, env.JOB_SYNC_INTERVAL_HOURS * 60 * 60 * 1000)
   : () => {};
@@ -127,6 +143,7 @@ const stopReminders = env.REMINDERS
 async function shutdown(signal: string): Promise<void> {
   logger.info('Shutting down', { signal });
   stopJobSync();
+  linkImports.stop();
   stopReminders();
   server.close();
   try {

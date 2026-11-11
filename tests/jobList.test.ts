@@ -2,7 +2,7 @@ import type { messagingApi } from '@line/bot-sdk';
 import { describe, expect, it } from 'vitest';
 import { LINK_PROVIDER } from '../src/jobs/repository.js';
 import { decodePostback } from '../src/line/postback.js';
-import { MAX_LINKS_PER_MESSAGE } from '../src/line/tracking.js';
+import { MAX_LINKS_PER_MESSAGE, MAX_QUEUED_PER_USER } from '../src/line/tracking.js';
 import { createFakeBot } from './fakes.js';
 
 async function readyBot() {
@@ -112,15 +112,90 @@ describe('many links in one message', () => {
     expect(reply[0]).toContain('ลิงก์ซ้ำ 2 ลิงก์');
   });
 
-  it(`stops at ${MAX_LINKS_PER_MESSAGE} links`, async () => {
+  it(`saves up to ${MAX_LINKS_PER_MESSAGE} links right away`, async () => {
     const bot = await readyBot();
-    const links = Array.from({ length: 12 }, (_, i) => `https://x.example/${i}`).join(' ');
-    const reply = await bot.say(links);
-    expect(reply[0]).toContain(`ได้รับ ${MAX_LINKS_PER_MESSAGE} ลิงก์`);
-    expect(reply[0]).toContain('ส่งที่เหลือมาอีกข้อความ');
-    expect(bot.previewLink).toHaveBeenCalledTimes(MAX_LINKS_PER_MESSAGE);
+    const links = Array.from({ length: MAX_LINKS_PER_MESSAGE }, (_, i) => `https://x.example/${i}`);
+    const reply = await bot.say(links.join(' '));
+    expect(reply[0]).toContain(`บันทึกใหม่ ${MAX_LINKS_PER_MESSAGE} งาน`);
+    expect(bot.importRows).toHaveLength(0);
+  });
+});
+
+describe('big batches of links (background queue)', () => {
+  const many = (n: number, host = 'x.example') =>
+    Array.from({ length: n }, (_, i) => `https://${host}/${i}`);
+
+  it('queues 50 links, answers at once, then pushes one summary', async () => {
+    const bot = await readyBot();
+    bot.linkPreview.next = {
+      title: 'Analyst',
+      company: 'Acme',
+      location: '',
+      department: null,
+      workplace: null,
+    };
+    const known = bot.addJob({ title: 'Known', url: 'https://x.example/7' });
+    await bot.tap({ a: 'job', v: 'save', j: known });
+
+    const links = [
+      ...many(50),
+      'https://x.example/3?utm_source=line',
+      `https://x.example/${'a'.repeat(1100)}`,
+    ];
+    const reply = await bot.say(links.join('\n'));
+    expect(reply).toHaveLength(1);
+    expect(reply[0]).toContain('ได้รับ 52 ลิงก์ กำลังทยอยบันทึก');
+    expect(reply[0]).toContain('ลิงก์ซ้ำในข้อความนี้ 1 ลิงก์');
+    expect(bot.kickImports).toHaveBeenCalled();
+    expect(bot.previewLink).not.toHaveBeenCalled(); // nothing fetched inside the reply
+    expect(bot.importRows).toHaveLength(51);
+
+    await bot.drainImports();
+    expect(bot.line.push).toHaveBeenCalledTimes(1);
+    const [to, messages] = bot.line.push.mock.calls[0] as unknown as [
+      string,
+      messagingApi.TextMessage[],
+    ];
+    expect(to).toBe('U1');
+    const summary = messages[0]!.text;
+    expect(summary).toContain('บันทึกลิงก์เสร็จแล้ว');
+    expect(summary).toContain('บันทึกใหม่ 49 งาน');
+    expect(summary).toContain('…และอีก 34 งาน');
+    expect(summary).toContain('ลิงก์ซ้ำ 2 ลิงก์'); // the known job + the repeat in the message
+    expect(summary).toContain('ใช้ไม่ได้ 1 ลิงก์');
+    expect(await bot.tap({ a: 'menu', m: 'saved' })).toEqual(['[flex]']);
+    expect(JSON.stringify(bot.lastReply()[0])).toContain('50 งาน');
+    // The queue is cleaned up once reported.
+    expect(bot.importRows).toHaveLength(0);
   });
 
+  it('sends one summary for several messages queued back to back', async () => {
+    const bot = await readyBot();
+    await bot.say(many(20, 'a.example').join(' '));
+    await bot.say(many(20, 'b.example').join(' '));
+    await bot.drainImports();
+    expect(bot.line.push).toHaveBeenCalledTimes(1);
+    const text = (
+      bot.line.push.mock.calls[0] as unknown as [string, messagingApi.TextMessage[]]
+    )[1][0]!.text;
+    expect(text).toContain('ได้รับ 40 ลิงก์');
+  });
+
+  it(`holds at most ${MAX_QUEUED_PER_USER} waiting links per user`, async () => {
+    const bot = await readyBot();
+    const filler = many(MAX_QUEUED_PER_USER - 5, 'filler.example');
+    await bot.tap({ a: 'consent', v: 'accept' });
+    for (let i = 0; i < filler.length; i += 400) {
+      await bot.say(filler.slice(i, i + 400).join(' '));
+    }
+    const reply = await bot.say(many(20, 'more.example').join(' '));
+    expect(reply[0]).toContain('เกินคิว 15 ลิงก์');
+    expect(bot.importRows).toHaveLength(MAX_QUEUED_PER_USER);
+    expect((await bot.say(many(20, 'later.example').join(' ')))[0]).toContain('เต็มคิว');
+  });
+});
+
+describe('many links in one message (continued)', () => {
   it('points to renaming when titles could not be read', async () => {
     const bot = await readyBot();
     const reply = await bot.say('https://a.example/1 https://b.example/2');

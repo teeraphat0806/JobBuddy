@@ -6,6 +6,7 @@ import type { InterviewRepository } from '../interviews/repository.js';
 import type { JobRepository, UserJobRepository } from '../jobs/repository.js';
 import { extractAllUrls, extractUrl, type LinkPreviewer } from '../links/preview.js';
 import type { JobDistances } from '../geo/service.js';
+import type { LinkImportRepository } from '../links/importRepository.js';
 import type { NoteRepository } from '../notes/repository.js';
 import type { PlaceRepository } from '../places/repository.js';
 import type { PrefsRepository } from '../prefs/repository.js';
@@ -32,7 +33,13 @@ import * as msg from './messages.js';
 import type { LineMessenger, OutgoingMessage } from './messenger.js';
 import { asPlaceNameFlow, createPlaceFlows, PLACE_NAME_FLOW, PLACE_WORDS } from './places.js';
 import { decodePostback, type PostbackData } from './postback.js';
-import { asFlowState, createTracking, LINK_TITLE_FLOW, NOTE_FLOW } from './tracking.js';
+import {
+  asFlowState,
+  createTracking,
+  LINK_TITLE_FLOW,
+  MAX_LINKS_PER_MESSAGE,
+  NOTE_FLOW,
+} from './tracking.js';
 
 export interface HandlerDeps {
   users: UserRepository;
@@ -51,6 +58,8 @@ export interface HandlerDeps {
   /** Home / condo locations; distance features are off without them. */
   places?: PlaceRepository;
   distances?: JobDistances;
+  /** Queue for messages with many links (saved in the background). */
+  linkImports?: { repo: LinkImportRepository; kick: () => void };
   /** Look up the user's tracked job locations in the background (after adding a place). */
   warmDistances?: (user: User) => void;
 }
@@ -270,6 +279,7 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
     }
     const links = typed !== undefined ? extractAllUrls(typed) : [];
     if (links.length === 1) return tracking.addLink(user, links[0]!);
+    if (links.length > MAX_LINKS_PER_MESSAGE) return tracking.queueLinks(user, links);
     if (links.length > 1) return tracking.addLinks(user, links);
 
     const wizard = session?.flow === WIZARD_FLOW ? asWizardState(session.state) : null;

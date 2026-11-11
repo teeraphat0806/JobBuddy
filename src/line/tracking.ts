@@ -10,7 +10,14 @@ import {
 } from '../jobs/repository.js';
 import { directionsUrl } from '../geo/distance.js';
 import type { JobDistances } from '../geo/service.js';
-import { canonicalUrl, hostLabel, placeholderTitle, type LinkPreviewer } from '../links/preview.js';
+import { canonicalUrl, type LinkPreviewer } from '../links/preview.js';
+import type { LinkImportRepository } from '../links/importRepository.js';
+import {
+  createLinkSaver,
+  isPlaceholder,
+  type SavedLink,
+  type TrackedLink,
+} from '../links/saveLink.js';
 import type { NoteRepository } from '../notes/repository.js';
 import { jobBubble, jobCarousel, type CardJob } from './jobCards.js';
 import type { OutgoingMessage } from './messenger.js';
@@ -36,6 +43,8 @@ export interface TrackingDeps {
   timeZone?: string;
   now?: () => Date;
   getAddFriendUrl?: () => string | undefined;
+  /** Background queue for messages with many links; without it only the first few are saved. */
+  linkImports?: { repo: LinkImportRepository; kick: () => void };
   /** Distances from the user's home / condo; omitted means the feature is off. */
   distances?: JobDistances;
   /** Upcoming interview lines for a job, shown in its detail view. */
@@ -99,10 +108,13 @@ export function nextStepButtons(job: Job, stage: ApplicationStage) {
 
 const notFound = () => [text('ไม่พบงานนี้แล้วครับ อาจถูกลบออกจากระบบ')];
 
+/** Up to this many links are saved right away, with cards in the reply. */
 export const MAX_LINKS_PER_MESSAGE = 10;
+/** More than that are queued; a LINE message (5000 characters) holds ~150 links at most. */
+export const MAX_QUEUED_PER_MESSAGE = 500;
+/** Links one user may have waiting at once, across messages. */
+export const MAX_QUEUED_PER_USER = 2000;
 const LINK_CONCURRENCY = 4;
-const isPlaceholder = (job: Job) =>
-  job.provider === LINK_PROVIDER && job.title === placeholderTitle(job.board);
 const cannotRename = (job: Job) =>
   text(
     job.provider === LINK_PROVIDER
@@ -123,6 +135,7 @@ export function parseTitleInput(input: string): { title: string; company?: strin
 
 export function createTracking(deps: TrackingDeps) {
   const { jobs, userJobs, notes, sessions } = deps;
+  const saveLinkFor = createLinkSaver(deps);
   const timeZone = deps.timeZone ?? 'Asia/Bangkok';
   const now = deps.now ?? (() => new Date());
   /** "⏳ รอติดต่อกลับ · 5 วัน" for an applied job. */
@@ -152,54 +165,7 @@ export function createTracking(deps: TrackingDeps) {
     });
   }
 
-  interface TrackedLink {
-    /** 'new' = just saved; 'saved' / 'applied' = was already in that list (a duplicate). */
-    kind: 'new' | 'saved' | 'applied';
-    job: Job;
-    entry: UserJobEntry;
-    needsTitle: boolean;
-  }
-  type SavedLink = { kind: 'invalid'; raw: string } | TrackedLink;
-
-  /** Find or create the job behind one link and make sure it's in the user's list. */
-  async function saveLink(user: User, rawUrl: string): Promise<SavedLink> {
-    const url = canonicalUrl(rawUrl);
-    if (!url) return { kind: 'invalid', raw: rawUrl };
-
-    let job = await jobs.findByUrl(url);
-    if (!job) {
-      const preview = await deps.previewLink(url);
-      if (preview.source) {
-        const { provider, board, externalId } = preview.source;
-        job = await jobs.findBySource(provider, board, externalId);
-      }
-      if (!job) {
-        const host = hostLabel(url);
-        job = await jobs.createLinkJob({
-          board: host,
-          externalId: url,
-          company: preview.company ?? preview.source?.board ?? host,
-          title: preview.title ?? placeholderTitle(host),
-          location: preview.location,
-          department: preview.department,
-          workplace: preview.workplace,
-          url,
-        });
-      }
-    }
-    const needsTitle = isPlaceholder(job);
-    const entry = await userJobs.get(user.id, job.id);
-    if (entry?.status === 'applied' || entry?.status === 'saved') {
-      return { kind: entry.status, job, entry, needsTitle };
-    }
-    await userJobs.setStatus(user.id, job.id, 'saved');
-    return {
-      kind: 'new',
-      job,
-      entry: { status: 'saved', stage: null, stageSince: null },
-      needsTitle,
-    };
-  }
+  const saveLink = (user: User, rawUrl: string) => saveLinkFor(user.id, rawUrl);
 
   const invalidLinkText =
     'ลิงก์นี้ใช้ไม่ได้ครับ 😅 ต้องขึ้นต้นด้วย http:// หรือ https:// และยาวไม่เกิน 1000 ตัวอักษร';
@@ -351,6 +317,70 @@ export function createTracking(deps: TrackingDeps) {
       });
     }
     return out;
+  }
+
+  /**
+   * Many links in one message: queue them and answer right away (a reply has to go out within
+   * about a minute). The worker reads one page per site at a time and pushes a summary when done.
+   */
+  async function queueLinks(user: User, rawUrls: string[]): Promise<OutgoingMessage[]> {
+    const imports = deps.linkImports;
+    if (!imports) return addLinks(user, rawUrls);
+    const urls = rawUrls.slice(0, MAX_QUEUED_PER_MESSAGE);
+
+    const seen = new Set<string>();
+    const unique: string[] = [];
+    let repeated = 0;
+    for (const raw of urls) {
+      const key = canonicalUrl(raw) ?? raw;
+      if (seen.has(key)) repeated++;
+      else {
+        seen.add(key);
+        unique.push(raw);
+      }
+    }
+
+    const room = Math.max(0, MAX_QUEUED_PER_USER - (await imports.repo.queuedCount(user.id)));
+    if (room === 0) {
+      return [
+        text(
+          `⏳ ตอนนี้มีลิงก์รอบันทึกอยู่ ${MAX_QUEUED_PER_USER} ลิงก์แล้วครับ (เต็มคิว)\n` +
+            'รอให้บันทึกเสร็จก่อน แล้วค่อยส่งที่เหลือมาใหม่นะครับ',
+        ),
+      ];
+    }
+    const queued = unique.slice(0, room);
+    const dropped = unique.length - queued.length + (rawUrls.length - urls.length);
+    await imports.repo.enqueue(user.id, queued, queued.length + repeated, repeated);
+    imports.kick();
+
+    // Pages on one site are read one per second, so the busiest site sets the pace.
+    const perSite = new Map<string, number>();
+    for (const u of queued) {
+      let host = '';
+      try {
+        host = new URL(u).hostname;
+      } catch {
+        // invalid links are reported in the summary
+      }
+      perSite.set(host, (perSite.get(host) ?? 0) + 1);
+    }
+    const minutes = Math.max(1, Math.ceil((Math.max(...perSite.values()) * 1.2) / 60));
+
+    const lines = [
+      `📥 ได้รับ ${urls.length} ลิงก์ กำลังทยอยบันทึกให้ครับ`,
+      `⏱️ ใช้เวลาประมาณ ${minutes} นาที (อ่านทีละหน้า ไม่รัวเว็บต้นทาง)`,
+      'เสร็จแล้วจะส่งสรุปให้ในแชทนี้ ระหว่างนี้ใช้งานอย่างอื่นได้ตามปกติ',
+    ];
+    if (repeated) lines.push('', `🔁 ลิงก์ซ้ำในข้อความนี้ ${repeated} ลิงก์ (ไม่ได้บันทึกซ้ำ)`);
+    if (dropped) {
+      lines.push(
+        '',
+        `⚠️ เกินคิว ${dropped} ลิงก์ไม่ได้รับ — รับได้ครั้งละ ${MAX_QUEUED_PER_USER} ลิงก์ ` +
+          'ส่งมาใหม่หลังได้สรุปแล้วนะครับ',
+      );
+    }
+    return [text(lines.join('\n'), [savedListButton])];
   }
 
   /**
@@ -540,6 +570,7 @@ export function createTracking(deps: TrackingDeps) {
   return {
     addLink,
     addLinks,
+    queueLinks,
     askTitle,
     nameJob,
     skipTitle,

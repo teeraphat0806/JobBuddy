@@ -15,7 +15,14 @@ import {
   type UserJobRepository,
   type UserJobStatus,
 } from '../src/jobs/repository.js';
+import type {
+  ImportOutcome,
+  ImportSummary,
+  LinkImportRepository,
+} from '../src/links/importRepository.js';
+import { createLinkImportWorker } from '../src/links/importWorker.js';
 import type { LinkPreview } from '../src/links/preview.js';
+import { createLinkSaver } from '../src/links/saveLink.js';
 import type { NoteRepository } from '../src/notes/repository.js';
 import { createEventsHandler } from '../src/line/handlers.js';
 import type { LineMessenger, OutgoingMessage } from '../src/line/messenger.js';
@@ -334,6 +341,82 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
   const geo = createGeoService({ geocodes: geocodeRepo, geocoder, logger: silentLogger, now });
   const distances = createJobDistances({ places, geo });
 
+  // ---- Link import queue (in memory), drained by the real worker.
+  const importBatches = new Map<string, { userId: string; total: number; repeated: number }>();
+  const importRows: {
+    id: string;
+    batchId: string;
+    userId: string;
+    url: string;
+    status: 'pending' | 'working' | 'done';
+    outcome: ImportOutcome | null;
+    jobId: string | null;
+  }[] = [];
+  const linkImportRepo: LinkImportRepository = {
+    async enqueue(userId, urls, total, repeated) {
+      const batchId = randomUUID();
+      importBatches.set(batchId, { userId, total, repeated });
+      for (const url of urls) {
+        importRows.push({
+          id: randomUUID(),
+          batchId,
+          userId,
+          url,
+          status: 'pending',
+          outcome: null,
+          jobId: null,
+        });
+      }
+      return batchId;
+    },
+    queuedCount: async (userId) =>
+      importRows.filter((r) => r.userId === userId && r.status !== 'done').length,
+    async claim(limit) {
+      const taken = importRows.filter((r) => r.status === 'pending').slice(0, limit);
+      for (const r of taken) r.status = 'working';
+      return taken.map(({ id, batchId, userId, url }) => ({ id, batchId, userId, url }));
+    },
+    async finish(id, outcome, jobId) {
+      const r = importRows.find((x) => x.id === id)!;
+      Object.assign(r, { status: 'done', outcome, jobId });
+    },
+    async takeFinished(shown) {
+      const out: ImportSummary[] = [];
+      const usersDone = new Set(
+        [...importBatches.values()]
+          .map((b) => b.userId)
+          .filter((u) => !importRows.some((r) => r.userId === u && r.status !== 'done')),
+      );
+      for (const userId of usersDone) {
+        const ids = [...importBatches].filter(([, b]) => b.userId === userId).map(([id]) => id);
+        const rows = importRows.filter((r) => ids.includes(r.batchId));
+        const counts = { new: 0, duplicate: 0, invalid: 0, failed: 0 };
+        for (const r of rows) if (r.outcome) counts[r.outcome]++;
+        const user = [...usersByLineId.values()].find((u) => u.id === userId)!;
+        out.push({
+          userId,
+          lineUserId: user.lineUserId,
+          total: ids.reduce((n, id) => n + importBatches.get(id)!.total, 0),
+          repeated: ids.reduce((n, id) => n + importBatches.get(id)!.repeated, 0),
+          counts,
+          newJobs: rows
+            .filter((r) => r.outcome === 'new')
+            .slice(0, shown)
+            .map((r) => ({
+              title: jobRows.get(r.jobId!)!.title,
+              company: jobRows.get(r.jobId!)!.company,
+            })),
+        });
+        for (const id of ids) importBatches.delete(id);
+        for (let i = importRows.length - 1; i >= 0; i--) {
+          if (ids.includes(importRows[i]!.batchId)) importRows.splice(i, 1);
+        }
+      }
+      return out;
+    },
+  };
+  const kickImports = vi.fn();
+
   const replies: OutgoingMessage[][] = [];
   const line = {
     reply: vi.fn(async (_token: string, messages: OutgoingMessage[]) => {
@@ -344,7 +427,16 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
     getBotBasicId: vi.fn(async () => '@jobbuddy'),
   } satisfies LineMessenger;
 
+  const importWorker = createLinkImportWorker({
+    imports: linkImportRepo,
+    saveLink: createLinkSaver({ jobs, userJobs, previewLink }),
+    line,
+    logger: silentLogger,
+    perSiteIntervalMs: 0,
+  });
+
   const handle = createEventsHandler({
+    linkImports: { repo: linkImportRepo, kick: kickImports },
     places,
     distances,
     warmDistances: () => {},
@@ -394,6 +486,10 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
     addJob,
     jobs,
     placeRows,
+    importRows,
+    kickImports,
+    /** Runs the background link queue until it's empty. */
+    drainImports: () => importWorker.drain(),
     geocodeRows,
     geoPoints,
     geocoder,

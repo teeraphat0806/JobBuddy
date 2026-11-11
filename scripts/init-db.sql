@@ -130,6 +130,38 @@ ALTER TABLE "user_places" ADD CONSTRAINT "user_places_user_id_users_id_fk" FOREI
 CREATE INDEX "user_places_user_idx" ON "user_places" USING btree ("user_id");
 UPDATE "user_jobs" SET "stage_changed_at" = "updated_at" WHERE "stage" IS NOT NULL;
 
+-- 0006_link_import_queue
+CREATE TYPE "public"."link_import_outcome" AS ENUM('new', 'duplicate', 'invalid', 'failed');
+CREATE TYPE "public"."link_import_status" AS ENUM('pending', 'working', 'done');
+CREATE TABLE "link_import_batches" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"user_id" uuid NOT NULL,
+	"total" integer NOT NULL,
+	"repeated" integer DEFAULT 0 NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"notified_at" timestamp with time zone
+);
+CREATE TABLE "link_imports" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"batch_id" uuid NOT NULL,
+	"user_id" uuid NOT NULL,
+	"url" text NOT NULL,
+	"status" "link_import_status" DEFAULT 'pending' NOT NULL,
+	"outcome" "link_import_outcome",
+	"job_id" uuid,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"claimed_at" timestamp with time zone,
+	"done_at" timestamp with time zone
+);
+ALTER TABLE "link_import_batches" ADD CONSTRAINT "link_import_batches_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "link_imports" ADD CONSTRAINT "link_imports_batch_id_link_import_batches_id_fk" FOREIGN KEY ("batch_id") REFERENCES "public"."link_import_batches"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "link_imports" ADD CONSTRAINT "link_imports_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "link_imports" ADD CONSTRAINT "link_imports_job_id_jobs_id_fk" FOREIGN KEY ("job_id") REFERENCES "public"."jobs"("id") ON DELETE set null ON UPDATE no action;
+CREATE INDEX "link_import_batches_user_idx" ON "link_import_batches" USING btree ("user_id");
+CREATE INDEX "link_imports_status_idx" ON "link_imports" USING btree ("status","created_at");
+CREATE INDEX "link_imports_batch_idx" ON "link_imports" USING btree ("batch_id");
+CREATE INDEX "link_imports_user_status_idx" ON "link_imports" USING btree ("user_id","status");
+
 CREATE SCHEMA IF NOT EXISTS drizzle;
 CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
   id SERIAL PRIMARY KEY,
@@ -142,6 +174,7 @@ INSERT INTO drizzle.__drizzle_migrations (hash, created_at) VALUES
   ('cffb8dccdb5e66548c9d0c29b312271cb822135eed80658d2171d02d412ce51e', 1794284280351),
   ('7f70905c458d98678c246b5c1c6f116645ca824345eb978e25a8a8749ab68807', 1794292167557),
   ('5eebfe124dd42029b3e8868bd913f581595897fde6a22d0723e217ae4f429c34', 1794293147776),
-  ('ff1c9259f6ee7ea24c6e636a217cd114e3b709a81771888771492680a47a4e08', 1794370015409);
+  ('ff1c9259f6ee7ea24c6e636a217cd114e3b709a81771888771492680a47a4e08', 1794370015409),
+  ('8be86f66fe0f8b851eea2681c5300ff2c7a2d304e0c2c991f038c38aaad67977', 1794372543157);
 
 COMMIT;
