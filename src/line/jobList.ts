@@ -37,10 +37,15 @@ function navButton(label: string, data: PostbackData): messagingApi.FlexButton {
   };
 }
 
-function row(item: ListedJob, n: number): messagingApi.FlexBox {
+/** A list row, with the stage's day count and distances already worked out. */
+export type ListRow = ListedJob & { stageText?: string; distanceText?: string };
+
+function row(item: ListRow, n: number): messagingApi.FlexBox {
   const { job, stage, noteCount } = item;
   const meta = [job.company];
-  if (stage) meta.push(STAGE_LABEL[stage]);
+  if (stage) meta.push(item.stageText ?? STAGE_LABEL[stage]);
+  // Nearest place only: rows are short.
+  if (item.distanceText) meta.push(`📏 ${item.distanceText.split(' · ')[0]}`);
   if (noteCount) meta.push(`📝 ${noteCount}`);
   if (!job.active) meta.push('⛔ ปิดรับ');
   return {
@@ -83,7 +88,7 @@ function row(item: ListedJob, n: number): messagingApi.FlexBox {
  * Much easier to scan than a carousel once a user has more than a handful of jobs.
  */
 export function jobListMessage(
-  items: ListedJob[],
+  items: ListRow[],
   status: ListStatus,
   opts: { total: number; page: number },
 ): OutgoingMessage {

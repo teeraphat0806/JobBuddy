@@ -10,3 +10,4 @@
   - Other links: one SSRF-safe page fetch that reads only meta tags, schema.org JSON-LD `JobPosting`, and a few per-site rules (JobThai description and title, JobsDB title and advertiser markup, JobBKK JSON-LD).
   - A board's homepage slogan is not a job title. When nothing useful is found, use the placeholder title and ask the user for one.
 - The SSRF guard checks the address on the real socket lookup: no private or reserved IPs, only ports 80/443, and every redirect is re-checked. Keep every page fetch going through it.
+- **Geocoding**: OpenStreetMap Nominatim. Send only public job-location text, at most 1 request per second, with an identifying User-Agent, and cache every result. Show the "© OpenStreetMap contributors" attribution where distances are explained. Never send users' places.

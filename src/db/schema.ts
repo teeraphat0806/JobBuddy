@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   boolean,
+  doublePrecision,
   index,
   integer,
   jsonb,
@@ -148,6 +149,8 @@ export const userJobs = pgTable(
       .references(() => jobs.id, { onDelete: 'cascade' }),
     status: userJobStatus('status').notNull(),
     stage: applicationStage('stage'),
+    /** When the current stage began; the bot counts days from here ("waiting 5 days"). */
+    stageChangedAt: timestamp('stage_changed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .notNull()
@@ -205,3 +208,39 @@ export const interviews = pgTable(
 );
 
 export type Interview = typeof interviews.$inferSelect;
+
+/**
+ * Places a user commutes from (home, condo...), shared by sending a LINE location. Used only to
+ * show how far each job is; never sent to any outside service.
+ */
+export const userPlaces = pgTable(
+  'user_places',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    label: text('label').notNull(),
+    lat: doublePrecision('lat').notNull(),
+    lng: doublePrecision('lng').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('user_places_user_idx').on(t.userId)],
+);
+
+export type UserPlace = typeof userPlaces.$inferSelect;
+
+/**
+ * Cache of job-location text -> coordinates (public job data only). lat/lng are null when the
+ * place wasn't found or was too coarse (a whole province) to give a useful distance.
+ */
+export const geocodes = pgTable('geocodes', {
+  query: text('query').primaryKey(),
+  lat: doublePrecision('lat'),
+  lng: doublePrecision('lng'),
+  /** What the geocoder matched, e.g. "Huai Khwang District, Bangkok". */
+  label: text('label'),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type Geocode = typeof geocodes.$inferSelect;

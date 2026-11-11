@@ -7,6 +7,9 @@
 - **User job**: the user's relation to a job. Status is `saved`, `applied` or `hidden`. Applied jobs also have a stage: applied → contacted → interview → waiting → offer / rejected.
   - Applying never gets downgraded by re-saving the job.
   - Sending a link that is already saved or applied counts as a duplicate: the bot reports it and doesn't save it again.
+  - `stage_changed_at` records when the current stage began; the bot shows "N days" in it. It restarts only when the stage actually changes. Each stage offers its likely next steps as buttons (applied -> contacted -> book interview / interviewed -> waiting -> offer / rejected).
+- **Places**: up to 5 per user (home, condo...), saved from a shared LINE location. They're used only for straight-line distances to jobs and never sent anywhere.
+- **Geocodes** cache job-location text to coordinates, shared by all users. Province-level matches are stored as "not found", since they say nothing useful about a commute.
 - **Notes** belong to a user and a job.
 - **Interviews** have a start time and an optional place.
   - Reminders go out at 19:00 the evening before and 2 hours before.

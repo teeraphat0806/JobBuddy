@@ -1,4 +1,5 @@
 import type { User } from '../db/schema.js';
+import type { JobDistances } from '../geo/service.js';
 import { rankJobs } from '../jobs/match.js';
 import type { JobRepository, UserJobRepository, UserJobStatus } from '../jobs/repository.js';
 import type { PrefsRepository } from '../prefs/repository.js';
@@ -13,6 +14,7 @@ import {
   type ListView,
 } from './jobList.js';
 import type { OutgoingMessage } from './messenger.js';
+import { stageStatus } from './stages.js';
 import { postbackButton, text } from './ui.js';
 
 export const FEED_PAGE_SIZE = 5;
@@ -23,6 +25,9 @@ export interface JobActionDeps {
   userJobs: UserJobRepository;
   /** e.g. https://line.me/R/ti/p/@abc1234 — appended to shared jobs when known. */
   getAddFriendUrl?: () => string | undefined;
+  distances?: JobDistances;
+  timeZone?: string;
+  now?: () => Date;
 }
 
 const viewButton = (status: 'saved' | 'applied') =>
@@ -34,6 +39,10 @@ const editPrefsButton = postbackButton('⚙️ แก้ตั้งค่าง
 
 export function createJobActions(deps: JobActionDeps) {
   const { prefs, jobs, userJobs } = deps;
+  const timeZone = deps.timeZone ?? 'Asia/Bangkok';
+  const now = deps.now ?? (() => new Date());
+  const distancesFor = (user: User, list: Parameters<JobDistances['forJobs']>[1]) =>
+    deps.distances?.forJobs(user.id, list) ?? Promise.resolve(new Map<string, string>());
 
   /** "งานใหม่วันนี้": jobs matching the user's preferences, excluding ones they acted on. */
   async function feed(user: User, page: number): Promise<OutgoingMessage[] | 'needs-prefs'> {
@@ -63,6 +72,10 @@ export function createJobActions(deps: JobActionDeps) {
       return [text('ดูครบทุกงานแล้วครับ 🎉 กลับมาดูใหม่พรุ่งนี้นะ', [feedButton])];
     }
     const hasMore = start + FEED_PAGE_SIZE < ranked.length;
+    const distances = await distancesFor(
+      user,
+      slice.map((r) => r.job),
+    );
     const companies = new Set(all.map((j) => j.company)).size;
 
     const header =
@@ -74,7 +87,10 @@ export function createJobActions(deps: JobActionDeps) {
     return [
       text(header),
       jobCarousel(
-        slice.map((r) => ({ job: r.job, isNew: r.isNew })),
+        slice.map((r) => ({
+          job: { ...r.job, distanceText: distances.get(r.job.id) },
+          isNew: r.isNew,
+        })),
         'feed',
         {
           altText: `งานที่ตรงกับคุณ ${slice.length} ตำแหน่ง`,
@@ -108,7 +124,17 @@ export function createJobActions(deps: JobActionDeps) {
     const size = view === 'list' ? LIST_PAGE_SIZE : CARD_PAGE_SIZE;
     const pages = Math.ceil(total / size);
     const page = Math.min(Math.max(1, requestedPage), pages);
-    const items = await userJobs.list(user.id, status, size, (page - 1) * size);
+    const listed = await userJobs.list(user.id, status, size, (page - 1) * size);
+    const distances = await distancesFor(
+      user,
+      listed.map((i) => i.job),
+    );
+    const at = now();
+    const items = listed.map((i) => ({
+      ...i,
+      stageText: i.stage ? stageStatus(i.stage, i.stageSince, at, timeZone) : undefined,
+      distanceText: distances.get(i.job.id),
+    }));
 
     if (view === 'list') return [jobListMessage(items, status, { total, page })];
 
@@ -124,7 +150,9 @@ export function createJobActions(deps: JobActionDeps) {
         nav,
       ),
       jobCarousel(
-        items.map(({ job, stage, noteCount }) => ({ job: { ...job, stage, noteCount } })),
+        items.map(({ job, stage, stageText, distanceText, noteCount }) => ({
+          job: { ...job, stage, stageText, distanceText, noteCount },
+        })),
         status,
         {
           altText: `${title} ${total} งาน`,

@@ -1,16 +1,20 @@
+import type { messagingApi } from '@line/bot-sdk';
 import type { SessionRepository } from '../conversation/repository.js';
 import type { Job, User } from '../db/schema.js';
 import {
   LINK_PROVIDER,
+  type ApplicationStage,
   type JobRepository,
   type UserJobEntry,
   type UserJobRepository,
 } from '../jobs/repository.js';
+import { directionsUrl } from '../geo/distance.js';
+import type { JobDistances } from '../geo/service.js';
 import { canonicalUrl, hostLabel, placeholderTitle, type LinkPreviewer } from '../links/preview.js';
 import type { NoteRepository } from '../notes/repository.js';
 import { jobBubble, jobCarousel, type CardJob } from './jobCards.js';
 import type { OutgoingMessage } from './messenger.js';
-import { isStage, STAGE_LABEL, STAGES } from './stages.js';
+import { isStage, STAGE_LABEL, STAGES, stageStatus } from './stages.js';
 import { linkButton, pickerButton, postbackButton, sayButton, text } from './ui.js';
 
 /** Conversation flows owned by this module (stored in conversation_sessions.flow). */
@@ -30,7 +34,10 @@ export interface TrackingDeps {
   sessions: SessionRepository;
   previewLink: LinkPreviewer;
   timeZone?: string;
+  now?: () => Date;
   getAddFriendUrl?: () => string | undefined;
+  /** Distances from the user's home / condo; omitted means the feature is off. */
+  distances?: JobDistances;
   /** Upcoming interview lines for a job, shown in its detail view. */
   interviewLines?: (user: User, jobId: string) => Promise<string[]>;
 }
@@ -55,8 +62,40 @@ const detailButton = (job: Job) =>
 const stageButton = (job: Job) =>
   postbackButton('🔄 อัปเดตสถานะ', { a: 'job', v: 'stage', j: job.id });
 
-const interviewButton = (job: Job) =>
-  pickerButton('📅 นัดสัมภาษณ์', { a: 'iv', v: 'new', j: job.id });
+const interviewButton = (job: Job, label = '📅 นัดสัมภาษณ์') =>
+  pickerButton(label, { a: 'iv', v: 'new', j: job.id });
+
+/** The encoded postback of a quick reply, if it is one (to avoid offering a button twice). */
+const postbackDataOf = (b: messagingApi.QuickReplyItem) =>
+  b.action?.type === 'postback' ? b.action.data : undefined;
+
+const stageTap = (job: Job, stage: ApplicationStage, label = STAGE_LABEL[stage]) =>
+  postbackButton(label, { a: 'stage', v: stage, j: job.id });
+
+/**
+ * The likely next steps from a stage, as buttons:
+ * applied (waiting for a call) -> contacted -> interview booked / interviewed -> waiting for the
+ * result -> offer or rejected.
+ */
+export function nextStepButtons(job: Job, stage: ApplicationStage) {
+  const rejected = stageTap(job, 'rejected', '🙏 ไม่ผ่าน');
+  switch (stage) {
+    case 'applied':
+      return [stageTap(job, 'contacted', '📞 ติดต่อกลับแล้ว'), rejected];
+    case 'contacted':
+      return [
+        interviewButton(job, '📅 ยัง นัดสัมภาษณ์'),
+        stageTap(job, 'waiting', '✅ สัมภาษณ์แล้ว'),
+        rejected,
+      ];
+    case 'interview':
+      return [stageTap(job, 'waiting', '✅ สัมภาษณ์แล้ว'), rejected];
+    case 'waiting':
+      return [stageTap(job, 'offer', '🎉 ได้งาน'), rejected];
+    default:
+      return [];
+  }
+}
 
 const notFound = () => [text('ไม่พบงานนี้แล้วครับ อาจถูกลบออกจากระบบ')];
 
@@ -85,6 +124,10 @@ export function parseTitleInput(input: string): { title: string; company?: strin
 export function createTracking(deps: TrackingDeps) {
   const { jobs, userJobs, notes, sessions } = deps;
   const timeZone = deps.timeZone ?? 'Asia/Bangkok';
+  const now = deps.now ?? (() => new Date());
+  /** "⏳ รอติดต่อกลับ · 5 วัน" for an applied job. */
+  const statusOf = (entry: UserJobEntry) =>
+    stageStatus(entry.stage ?? 'applied', entry.stageSince, now(), timeZone);
   const fmtDate = new Intl.DateTimeFormat('th-TH', {
     timeZone,
     day: 'numeric',
@@ -95,9 +138,12 @@ export function createTracking(deps: TrackingDeps) {
 
   async function card(user: User, job: Job, entry: UserJobEntry | undefined) {
     const variant = entry?.status === 'applied' ? 'applied' : 'saved';
+    const distance = await deps.distances?.forJob(user.id, job);
     const cardJob: CardJob = {
       ...job,
+      distanceText: distance?.text,
       stage: entry?.stage ?? null,
+      stageText: entry?.status === 'applied' ? statusOf(entry) : undefined,
       noteCount: await notes.count(user.id, job.id),
     };
     return jobCarousel([{ job: cardJob }], variant, {
@@ -147,7 +193,12 @@ export function createTracking(deps: TrackingDeps) {
       return { kind: entry.status, job, entry, needsTitle };
     }
     await userJobs.setStatus(user.id, job.id, 'saved');
-    return { kind: 'new', job, entry: { status: 'saved', stage: null }, needsTitle };
+    return {
+      kind: 'new',
+      job,
+      entry: { status: 'saved', stage: null, stageSince: null },
+      needsTitle,
+    };
   }
 
   const invalidLinkText =
@@ -155,9 +206,7 @@ export function createTracking(deps: TrackingDeps) {
 
   /** Where an already-tracked job lives, e.g. "⭐ ที่เก็บไว้". */
   const whereIs = (entry: UserJobEntry) =>
-    entry.status === 'applied'
-      ? `📋 ที่สมัครไว้ (สถานะ: ${STAGE_LABEL[entry.stage ?? 'applied']})`
-      : '⭐ ที่เก็บไว้';
+    entry.status === 'applied' ? `📋 ที่สมัครไว้ (${statusOf(entry)})` : '⭐ ที่เก็บไว้';
 
   /** The user sent a link: save the job and show it as a card. */
   async function addLink(user: User, rawUrl: string): Promise<OutgoingMessage[]> {
@@ -272,16 +321,31 @@ export function createTracking(deps: TrackingDeps) {
     const out: OutgoingMessage[] = [text(summary, [savedListButton])];
     if (added.length) {
       // Cards only for what was just saved; duplicates are already in the user's lists.
-      const counts = await Promise.all(added.map((r) => notes.count(user.id, r.job.id)));
+      const [counts, distances] = await Promise.all([
+        Promise.all(added.map((r) => notes.count(user.id, r.job.id))),
+        deps.distances?.forJobs(
+          user.id,
+          added.map((r) => r.job),
+        ) ?? Promise.resolve(new Map<string, string>()),
+      ]);
       out.push({
         type: 'flex',
         altText: `บันทึกงานจากลิงก์ ${added.length} งาน`,
         contents: {
           type: 'carousel',
           contents: added.slice(0, 12).map((r, i) =>
-            jobBubble({ ...r.job, stage: r.entry.stage, noteCount: counts[i] ?? 0 }, 'saved', {
-              addFriendUrl: deps.getAddFriendUrl?.(),
-            }),
+            jobBubble(
+              {
+                ...r.job,
+                stage: r.entry.stage,
+                noteCount: counts[i] ?? 0,
+                distanceText: distances.get(r.job.id),
+              },
+              'saved',
+              {
+                addFriendUrl: deps.getAddFriendUrl?.(),
+              },
+            ),
           ),
         },
       });
@@ -339,16 +403,18 @@ export function createTracking(deps: TrackingDeps) {
   async function detail(user: User, jobId: string): Promise<OutgoingMessage[]> {
     const job = await jobs.getById(jobId);
     if (!job) return notFound();
-    const [entry, list, total, ivLines] = await Promise.all([
+    const [entry, list, total, ivLines, distance] = await Promise.all([
       userJobs.get(user.id, job.id),
       notes.list(user.id, job.id, DETAIL_NOTES),
       notes.count(user.id, job.id),
       deps.interviewLines?.(user, job.id) ?? Promise.resolve([]),
+      deps.distances?.forJob(user.id, job) ?? Promise.resolve(null),
     ]);
 
     const lines = [`💼 ${job.title}`, `🏢 ${job.company}`];
     if (job.location) lines.push(`📍 ${job.location}`);
-    if (entry?.status === 'applied') lines.push(`สถานะ: ${STAGE_LABEL[entry.stage ?? 'applied']}`);
+    if (distance) lines.push(`📏 ${distance.text} (เส้นตรง)`);
+    if (entry?.status === 'applied') lines.push(`สถานะ: ${statusOf(entry)}`);
     else if (entry?.status === 'saved') lines.push('สถานะ: ⭐ เก็บไว้');
     lines.push(...ivLines);
     lines.push(`🔗 ${job.url}`, '');
@@ -367,8 +433,13 @@ export function createTracking(deps: TrackingDeps) {
 
     const buttons = [noteButton(job)];
     if (job.url.length <= 1000) buttons.push(linkButton('🔗 เปิดประกาศ', job.url));
+    if (distance) buttons.push(linkButton('🗺️ เส้นทาง', directionsUrl(distance.to)));
     if (entry?.status === 'applied') {
-      buttons.push(stageButton(job), interviewButton(job));
+      const next = nextStepButtons(job, entry.stage ?? 'applied');
+      buttons.unshift(...next);
+      buttons.push(stageButton(job));
+      if (!next.some((b) => b.action?.type === 'datetimepicker'))
+        buttons.push(interviewButton(job));
     } else {
       buttons.push(postbackButton('✅ สมัครแล้ว', { a: 'job', v: 'apply', j: job.id }));
     }
@@ -411,13 +482,17 @@ export function createTracking(deps: TrackingDeps) {
     if (!job) return notFound();
     const entry = await userJobs.get(user.id, job.id);
     const current = entry?.status === 'applied' ? (entry.stage ?? 'applied') : null;
+    // Likely next steps first, then any other stage (to fix a mistake).
+    const next = current ? nextStepButtons(job, current) : [];
+    const offered = new Set(next.map(postbackDataOf));
+    const others = STAGES.filter((st) => st !== current)
+      .map((st) => stageTap(job, st))
+      .filter((b) => !offered.has(postbackDataOf(b)));
     return [
       text(
         `🔄 งานนี้ถึงขั้นไหนแล้วครับ?\n${nameOf(job)}` +
-          (current ? `\nตอนนี้: ${STAGE_LABEL[current]}` : ''),
-        STAGES.filter((s) => s !== current).map((s) =>
-          postbackButton(STAGE_LABEL[s], { a: 'stage', v: s, j: job.id }),
-        ),
+          (entry && current ? `\nตอนนี้: ${statusOf(entry)}` : ''),
+        [...next, ...others],
       ),
     ];
   }
@@ -426,11 +501,27 @@ export function createTracking(deps: TrackingDeps) {
     if (!isStage(value)) return [text('ไม่รู้จักสถานะนี้ครับ')];
     const job = await jobs.getById(jobId);
     if (!job) return notFound();
+    const before = await userJobs.get(user.id, job.id);
     await userJobs.setStage(user.id, job.id, value);
+    const entry = (await userJobs.get(user.id, job.id)) ?? {
+      status: 'applied' as const,
+      stage: value,
+      stageSince: now(),
+    };
+    const restarted = before?.stage !== value;
 
-    const lines = [`อัปเดตแล้ว → ${STAGE_LABEL[value]}`, nameOf(job)];
-    const buttons = [appliedListButton, detailButton(job)];
+    const lines = [`อัปเดตแล้ว → ${statusOf(entry)}`, nameOf(job)];
+    const buttons = [...nextStepButtons(job, value), detailButton(job), appliedListButton];
     switch (value) {
+      case 'applied':
+        if (restarted) lines.push('', '⏳ เริ่มนับวันรอติดต่อกลับ ถ้ามีการติดต่อกลับ กด 📞 ได้เลย');
+        break;
+      case 'contacted':
+        lines.push('', '📞 เยี่ยมเลย! สัมภาษณ์แล้วหรือยังครับ?');
+        break;
+      case 'waiting':
+        if (restarted) lines.push('', '⏳ เริ่มนับวันรอผลใหม่ ได้ผลแล้วกด 🎉 หรือ 🙏 ได้เลย');
+        break;
       case 'interview':
         lines.push('', '📅 กดเลือกวันเวลานัด แล้วระบบจะเตือนให้ก่อนวันสัมภาษณ์ครับ');
         buttons.unshift(interviewButton(job));

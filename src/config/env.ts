@@ -24,6 +24,13 @@ const envSchema = z.object({
     .default('true')
     .transform((v) => v === 'true'),
   REMINDER_INTERVAL_MINUTES: z.coerce.number().positive().max(60).default(5),
+  /** Distances from users' homes to jobs: job locations are geocoded with OpenStreetMap. */
+  GEOCODING: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  /** A Nominatim server; the public one allows 1 request/second (we cache every result). */
+  GEOCODER_URL: z.string().url().default('https://nominatim.openstreetmap.org'),
 });
 
 export type Env = z.infer<typeof envSchema>;

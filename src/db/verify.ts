@@ -2,11 +2,13 @@ import { getTableName, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
 import {
   conversationSessions,
+  geocodes,
   interviews,
   jobNotes,
   jobPreferences,
   jobs,
   userJobs,
+  userPlaces,
   users,
 } from './schema.js';
 
@@ -19,6 +21,8 @@ export const REQUIRED_TABLES = [
   userJobs,
   interviews,
   jobNotes,
+  userPlaces,
+  geocodes,
 ].map((t) => getTableName(t));
 
 /** Tables the app needs that don't exist in the `public` schema. */

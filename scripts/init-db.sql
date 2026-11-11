@@ -109,6 +109,27 @@ ALTER TABLE "interviews" ADD CONSTRAINT "interviews_job_id_jobs_id_fk" FOREIGN K
 CREATE INDEX "interviews_user_starts_idx" ON "interviews" USING btree ("user_id","starts_at");
 CREATE INDEX "interviews_starts_idx" ON "interviews" USING btree ("starts_at");
 
+-- 0005_stage_days_and_places
+CREATE TABLE "geocodes" (
+	"query" text PRIMARY KEY NOT NULL,
+	"lat" double precision,
+	"lng" double precision,
+	"label" text,
+	"resolved_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+CREATE TABLE "user_places" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"user_id" uuid NOT NULL,
+	"label" text NOT NULL,
+	"lat" double precision NOT NULL,
+	"lng" double precision NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+ALTER TABLE "user_jobs" ADD COLUMN "stage_changed_at" timestamp with time zone;
+ALTER TABLE "user_places" ADD CONSTRAINT "user_places_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+CREATE INDEX "user_places_user_idx" ON "user_places" USING btree ("user_id");
+UPDATE "user_jobs" SET "stage_changed_at" = "updated_at" WHERE "stage" IS NOT NULL;
+
 CREATE SCHEMA IF NOT EXISTS drizzle;
 CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
   id SERIAL PRIMARY KEY,
@@ -120,6 +141,7 @@ INSERT INTO drizzle.__drizzle_migrations (hash, created_at) VALUES
   ('c5fa00ff59f54efe3bb09e5ec546b26aa056ad802a977e0b9998a67064a82f07', 1794283471695),
   ('cffb8dccdb5e66548c9d0c29b312271cb822135eed80658d2171d02d412ce51e', 1794284280351),
   ('7f70905c458d98678c246b5c1c6f116645ca824345eb978e25a8a8749ab68807', 1794292167557),
-  ('5eebfe124dd42029b3e8868bd913f581595897fde6a22d0723e217ae4f429c34', 1794293147776);
+  ('5eebfe124dd42029b3e8868bd913f581595897fde6a22d0723e217ae4f429c34', 1794293147776),
+  ('ff1c9259f6ee7ea24c6e636a217cd114e3b709a81771888771492680a47a4e08', 1794370015409);
 
 COMMIT;

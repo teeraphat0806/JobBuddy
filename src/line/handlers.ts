@@ -5,7 +5,9 @@ import { errorFields, httpStatusOf, type Logger } from '../lib/logger.js';
 import type { InterviewRepository } from '../interviews/repository.js';
 import type { JobRepository, UserJobRepository } from '../jobs/repository.js';
 import { extractAllUrls, extractUrl, type LinkPreviewer } from '../links/preview.js';
+import type { JobDistances } from '../geo/service.js';
 import type { NoteRepository } from '../notes/repository.js';
+import type { PlaceRepository } from '../places/repository.js';
 import type { PrefsRepository } from '../prefs/repository.js';
 import {
   advanceWizard,
@@ -28,6 +30,7 @@ import {
 import { createJobActions } from './jobActions.js';
 import * as msg from './messages.js';
 import type { LineMessenger, OutgoingMessage } from './messenger.js';
+import { asPlaceNameFlow, createPlaceFlows, PLACE_NAME_FLOW, PLACE_WORDS } from './places.js';
 import { decodePostback, type PostbackData } from './postback.js';
 import { asFlowState, createTracking, LINK_TITLE_FLOW, NOTE_FLOW } from './tracking.js';
 
@@ -45,13 +48,21 @@ export interface HandlerDeps {
   getAddFriendUrl?: () => string | undefined;
   timeZone?: string;
   now?: () => Date;
+  /** Home / condo locations; distance features are off without them. */
+  places?: PlaceRepository;
+  distances?: JobDistances;
+  /** Look up the user's tracked job locations in the background (after adding a place). */
+  warmDistances?: (user: User) => void;
 }
 
 export type EventsHandler = (events: webhook.Event[]) => Promise<void>;
 
 /** What the user did, normalised from text messages and postbacks. */
 type Input =
-  { kind: 'text'; text: string } | { kind: 'postback'; data: PostbackData } | { kind: 'other' };
+  | { kind: 'text'; text: string }
+  | { kind: 'postback'; data: PostbackData }
+  | { kind: 'location'; lat: number; lng: number }
+  | { kind: 'other' };
 
 const HELP_WORDS = ['วิธีใช้', 'help', 'เมนู', 'ช่วยด้วย', '?'];
 const PREFS_WORDS = ['ตั้งค่า', 'ตั้งค่างาน', 'settings'];
@@ -71,9 +82,11 @@ function inputOf(event: webhook.Event): Input | undefined {
     return { kind: 'postback', data: dt ? { ...data, dt } : data };
   }
   if (event.type === 'message') {
-    return event.message.type === 'text'
-      ? { kind: 'text', text: event.message.text.trim() }
-      : { kind: 'other' };
+    if (event.message.type === 'text') return { kind: 'text', text: event.message.text.trim() };
+    if (event.message.type === 'location') {
+      return { kind: 'location', lat: event.message.latitude, lng: event.message.longitude };
+    }
+    return { kind: 'other' };
   }
   return undefined;
 }
@@ -83,6 +96,13 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
   const jobActions = createJobActions(deps);
   const interviewFlows = createInterviewFlows(deps);
   const tracking = createTracking({ ...deps, interviewLines: interviewFlows.linesForJob });
+  const placeFlows = deps.places
+    ? createPlaceFlows({
+        places: deps.places,
+        sessions,
+        onPlacesChanged: deps.warmDistances,
+      })
+    : null;
 
   async function showFeed(user: User, page: number): Promise<OutgoingMessage[]> {
     const result = await jobActions.feed(user, page);
@@ -196,6 +216,18 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
       if (pb.v === 'edit' && pb.j) return tracking.askTitle(user, pb.j);
       return tracking.skipTitle(user);
     }
+    if (input.kind === 'location') {
+      // Doesn't touch any flow in progress (e.g. the prefs wizard): it just adds a place.
+      if (!placeFlows) return [msg.notUnderstood()];
+      return placeFlows.addFromLocation(user, input.lat, input.lng);
+    }
+    if (pb?.a === 'place' && placeFlows) {
+      await sessions.clear(user.id);
+      if (pb.v === 'name' && pb.i && pb.l) return placeFlows.rename(user, pb.i, pb.l);
+      if (pb.v === 'ask' && pb.i) return placeFlows.askName(user, pb.i);
+      if (pb.v === 'del' && pb.i) return placeFlows.remove(user, pb.i);
+      return placeFlows.show(user);
+    }
     if (pb?.a === 'iv') {
       await sessions.clear(user.id);
       if (pb.v === 'new' && pb.j) return interviewFlows.create(user, pb.j, pb.dt);
@@ -221,6 +253,10 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
       const state = asTimeFlow(session.state);
       const reply = state ? await interviewFlows.typedTime(user, state, typed) : null;
       if (reply) return reply;
+    }
+    if (typed !== undefined && session?.flow === PLACE_NAME_FLOW && placeFlows) {
+      const state = asPlaceNameFlow(session.state);
+      if (state) return placeFlows.rename(user, state.placeId, typed);
     }
     if (typed !== undefined && session?.flow === IV_PLACE_FLOW) {
       const state = asPlaceFlow(session.state);
@@ -251,6 +287,7 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
       if (FEED_WORDS.includes(lower)) return showFeed(user, 1);
       if (HELP_WORDS.includes(lower)) return [msg.helpMessage()];
       if (INTERVIEW_WORDS.includes(lower)) return interviewFlows.list(user);
+      if (PLACE_WORDS.includes(lower) && placeFlows) return placeFlows.show(user);
       if (REMINDER_OFF_WORDS.includes(lower)) return interviewFlows.setReminders(user, false);
       if (REMINDER_ON_WORDS.includes(lower)) return interviewFlows.setReminders(user, true);
     }

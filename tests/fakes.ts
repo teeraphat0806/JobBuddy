@@ -2,7 +2,11 @@ import { randomUUID } from 'node:crypto';
 import type { webhook } from '@line/bot-sdk';
 import { vi } from 'vitest';
 import type { SessionRepository } from '../src/conversation/repository.js';
-import type { Interview, Job, User } from '../src/db/schema.js';
+import type { Geocode, Interview, Job, User, UserPlace } from '../src/db/schema.js';
+import type { Point } from '../src/geo/distance.js';
+import type { GeocodeRepository } from '../src/geo/repository.js';
+import { createGeoService, createJobDistances } from '../src/geo/service.js';
+import type { PlaceRepository } from '../src/places/repository.js';
 import type { InterviewRepository } from '../src/interviews/repository.js';
 import {
   LINK_PROVIDER,
@@ -96,7 +100,7 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
   const jobRows = new Map<string, Job>();
   const userJobRows = new Map<
     string,
-    { status: UserJobStatus; stage: ApplicationStage | null; at: number }
+    { status: UserJobStatus; stage: ApplicationStage | null; since: Date | null; at: number }
   >();
   const noteRows: { userId: string; jobId: string; body: string; at: number }[] = [];
   const ujKey = (userId: string, jobId: string) => `${userId}:${jobId}`;
@@ -138,15 +142,20 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
     },
     async get(userId, jobId) {
       const r = userJobRows.get(ujKey(userId, jobId));
-      return r ? { status: r.status, stage: r.stage } : undefined;
+      return r ? { status: r.status, stage: r.stage, stageSince: r.since } : undefined;
     },
     async setStatus(userId, jobId, status) {
       const prev = userJobRows.get(ujKey(userId, jobId));
-      const stage = status === 'applied' ? (prev?.stage ?? 'applied') : null;
-      userJobRows.set(ujKey(userId, jobId), { status, stage, at: ++tick });
+      const applied = status === 'applied';
+      const stage = applied ? (prev?.stage ?? 'applied') : null;
+      const since = applied ? (prev?.stage ? prev.since : now()) : null;
+      userJobRows.set(ujKey(userId, jobId), { status, stage, since, at: ++tick });
     },
-    setStage: async (userId, jobId, stage) =>
-      void userJobRows.set(ujKey(userId, jobId), { status: 'applied', stage, at: ++tick }),
+    async setStage(userId, jobId, stage) {
+      const prev = userJobRows.get(ujKey(userId, jobId));
+      const since = prev?.stage === stage ? (prev.since ?? now()) : now();
+      userJobRows.set(ujKey(userId, jobId), { status: 'applied', stage, since, at: ++tick });
+    },
     clear: async (userId, jobId) => void userJobRows.delete(ujKey(userId, jobId)),
     async list(userId, status, limit, offset = 0) {
       return [...userJobRows.entries()]
@@ -158,6 +167,7 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
           return {
             job: jobRows.get(jobId)!,
             stage: v.stage,
+            stageSince: v.since,
             noteCount: noteRows.filter((n) => n.userId === userId && n.jobId === jobId).length,
           };
         });
@@ -282,6 +292,48 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
     ...linkPreview.next,
   }));
 
+  // ---- Places and geocoding: `geoPoints` maps a geocoder query to where it is.
+  const placeRows: UserPlace[] = [];
+  const places: PlaceRepository = {
+    list: async (userId) => placeRows.filter((p) => p.userId === userId),
+    async add(userId, label, lat, lng) {
+      const row: UserPlace = { id: randomUUID(), userId, label, lat, lng, createdAt: now() };
+      placeRows.push(row);
+      return row;
+    },
+    async rename(userId, id, label) {
+      const row = placeRows.find((p) => p.id === id && p.userId === userId);
+      if (row) row.label = label;
+      return Boolean(row);
+    },
+    async remove(userId, id) {
+      const i = placeRows.findIndex((p) => p.id === id && p.userId === userId);
+      if (i >= 0) placeRows.splice(i, 1);
+      return i >= 0;
+    },
+  };
+  const geocodeRows = new Map<string, Geocode>();
+  const geocodeRepo: GeocodeRepository = {
+    getMany: async (qs) =>
+      new Map(qs.filter((q) => geocodeRows.has(q)).map((q) => [q, geocodeRows.get(q)!])),
+    async put(query, r) {
+      geocodeRows.set(query, {
+        query,
+        lat: r?.lat ?? null,
+        lng: r?.lng ?? null,
+        label: r?.label ?? null,
+        resolvedAt: now(),
+      });
+    },
+  };
+  const geoPoints = new Map<string, Point>();
+  const geocoder = vi.fn(async (q: string) => {
+    const p = geoPoints.get(q);
+    return p ? { ...p, label: q } : null;
+  });
+  const geo = createGeoService({ geocodes: geocodeRepo, geocoder, logger: silentLogger, now });
+  const distances = createJobDistances({ places, geo });
+
   const replies: OutgoingMessage[][] = [];
   const line = {
     reply: vi.fn(async (_token: string, messages: OutgoingMessage[]) => {
@@ -293,6 +345,9 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
   } satisfies LineMessenger;
 
   const handle = createEventsHandler({
+    places,
+    distances,
+    warmDistances: () => {},
     users,
     prefs,
     sessions,
@@ -338,6 +393,11 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
     previewLink,
     addJob,
     jobs,
+    placeRows,
+    geocodeRows,
+    geoPoints,
+    geocoder,
+    geo,
     line,
     handle,
     lastReply,
@@ -364,6 +424,14 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
         postback: { data: encodePostback(data) },
       } as webhook.Event),
     /** A date/time picker choice, e.g. "2026-11-15T14:00". */
+    /** The user shares a location from LINE's map. */
+    shareLocation: (lat: number, lng: number, userId = 'U1') =>
+      send({
+        ...base(userId),
+        type: 'message',
+        replyToken: 'rt',
+        message: { type: 'location', id: 'm', latitude: lat, longitude: lng, address: 'x' },
+      } as webhook.Event),
     pick: (data: PostbackData, datetime: string, userId = 'U1') =>
       send({
         ...base(userId),

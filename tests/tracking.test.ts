@@ -182,11 +182,11 @@ describe('application stages', () => {
     await bot.tap({ a: 'job', v: 'apply', j: id });
     expect(bot.userJobRows.get(`${userId(bot)}:${id}`)?.stage).toBe('applied');
     await bot.tap({ a: 'list', s: 'applied', v: 'card', p: '1' });
-    expect(bubbleOf(bot)).toContain('สถานะ: ✅ สมัครแล้ว');
+    expect(bubbleOf(bot)).toContain('สถานะ: ⏳ รอติดต่อกลับ · วันนี้');
     expect(bubbleOf(bot)).toContain('🔄 อัปเดตสถานะ');
   });
 
-  it('offers every other stage and moves the application along', async () => {
+  it('offers the next steps first, then every other stage', async () => {
     const bot = await readyBot();
     const id = bot.addJob({ title: 'QA' });
     await bot.tap({ a: 'job', v: 'apply', j: id });
@@ -194,13 +194,13 @@ describe('application stages', () => {
     const options = quickReplies(bot);
     expect(options.map((o) => o.data?.v)).toEqual([
       'contacted',
+      'rejected',
       'interview',
       'waiting',
       'offer',
-      'rejected',
     ]);
 
-    const reply = await bot.tap(options[1]!.data!);
+    const reply = await bot.tap(options[2]!.data!);
     expect(reply[0]).toContain('📅 นัดสัมภาษณ์');
     expect(bot.userJobRows.get(`${userId(bot)}:${id}`)?.stage).toBe('interview');
     // Re-tapping "applied" on the card must not reset the stage.
@@ -217,6 +217,62 @@ describe('application stages', () => {
       status: 'applied',
       stage: 'contacted',
     });
+  });
+
+  it('counts days in each stage and restarts the count when the stage changes', async () => {
+    let clock = new Date('2026-11-01T03:00:00Z'); // 10:00 in Bangkok
+    const bot = createFakeBot({ now: () => clock });
+    await bot.follow();
+    await bot.tap({ a: 'consent', v: 'accept' });
+    const id = bot.addJob({ title: 'QA' });
+    const days = (n: number) => new Date(clock.getTime() + n * 86_400_000);
+
+    await bot.tap({ a: 'job', v: 'apply', j: id });
+    clock = days(5);
+    expect((await bot.tap({ a: 'job', v: 'detail', j: id }))[0]).toContain(
+      'สถานะ: ⏳ รอติดต่อกลับ · 5 วัน',
+    );
+    // Waiting for a call back: "they called" or "rejected".
+    expect(
+      quickReplies(bot)
+        .slice(0, 2)
+        .map((o) => o.label),
+    ).toEqual(['📞 ติดต่อกลับแล้ว', '🙏 ไม่ผ่าน']);
+
+    // They called: has the interview happened yet?
+    const called = await bot.tap({ a: 'stage', v: 'contacted', j: id });
+    expect(called[0]).toContain('สัมภาษณ์แล้วหรือยัง');
+    expect(
+      quickReplies(bot)
+        .slice(0, 3)
+        .map((o) => o.label),
+    ).toEqual(['📅 ยัง นัดสัมภาษณ์', '✅ สัมภาษณ์แล้ว', '🙏 ไม่ผ่าน']);
+    // The "not yet" button opens the date picker to book the interview.
+    const last = bot.lastReply().at(-1) as messagingApi.TextMessage;
+    expect(last.quickReply?.items?.[0]?.action?.type).toBe('datetimepicker');
+
+    // Interviewed: now waiting for the result, counted from zero again.
+    clock = days(3);
+    const waiting = await bot.tap({ a: 'stage', v: 'waiting', j: id });
+    expect(waiting[0]).toContain('⏳ รอผล · วันนี้');
+    expect(waiting[0]).toContain('เริ่มนับวันรอผลใหม่');
+    expect(
+      quickReplies(bot)
+        .slice(0, 2)
+        .map((o) => o.label),
+    ).toEqual(['🎉 ได้งาน', '🙏 ไม่ผ่าน']);
+
+    clock = days(2);
+    await bot.tap({ a: 'list', s: 'applied', v: 'list', p: '1' });
+    expect(JSON.stringify(bot.lastReply()[0])).toContain('⏳ รอผล · 2 วัน');
+
+    // Tapping the same stage again doesn't reset the count.
+    await bot.tap({ a: 'stage', v: 'waiting', j: id });
+    expect((await bot.tap({ a: 'job', v: 'detail', j: id }))[0]).toContain('รอผล · 2 วัน');
+
+    const offer = await bot.tap({ a: 'stage', v: 'offer', j: id });
+    expect(offer[0]).toContain('🎉 ได้งาน');
+    expect(offer[0]).not.toContain('วัน ·');
   });
 
   it('ignores unknown stages', async () => {

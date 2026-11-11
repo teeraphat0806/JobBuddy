@@ -16,6 +16,10 @@ export interface CardJob {
   active: boolean;
   /** Application stage, shown on 'applied' cards. */
   stage?: ApplicationStage | null;
+  /** The stage with its day count, e.g. "⏳ รอติดต่อกลับ · 5 วัน"; falls back to the stage name. */
+  stageText?: string;
+  /** How far it is from the user's places, e.g. "บ้าน ~12 กม.". */
+  distanceText?: string;
   noteCount?: number;
 }
 
@@ -130,11 +134,12 @@ export function jobBubble(
     { type: 'text', text: job.title, size: 'lg', weight: 'bold', wrap: true, maxLines: 3 },
   ];
   if (job.location) body.push(infoLine('📍', job.location));
+  if (job.distanceText) body.push(infoLine('📏', job.distanceText));
   if (job.department) body.push(infoLine('🏷️', job.department));
   if (variant === 'applied' && job.stage) {
     body.push({
       type: 'text',
-      text: `สถานะ: ${STAGE_LABEL[job.stage]}`,
+      text: `สถานะ: ${job.stageText ?? STAGE_LABEL[job.stage]}`,
       size: 'sm',
       weight: 'bold',
       color: '#111111',

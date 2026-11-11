@@ -24,11 +24,14 @@ export interface LinkJobInput {
 export interface UserJobEntry {
   status: UserJobStatus;
   stage: ApplicationStage | null;
+  /** When the current stage began (days are counted from here). */
+  stageSince: Date | null;
 }
 
 export interface ListedJob {
   job: Job;
   stage: ApplicationStage | null;
+  stageSince: Date | null;
   noteCount: number;
 }
 
@@ -55,7 +58,10 @@ export interface UserJobRepository {
   get(userId: string, jobId: string): Promise<UserJobEntry | undefined>;
   /** Setting 'applied' starts the stage at 'applied' unless it is already further along. */
   setStatus(userId: string, jobId: string, status: UserJobStatus): Promise<void>;
-  /** Moves an application to `stage`, marking the job applied if it wasn't. */
+  /**
+   * Moves an application to `stage`, marking the job applied if it wasn't. The day count restarts
+   * only when the stage actually changes.
+   */
   setStage(userId: string, jobId: string, stage: ApplicationStage): Promise<void>;
   clear(userId: string, jobId: string): Promise<void>;
   /** Most recently updated first. */
@@ -177,19 +183,31 @@ export function createUserJobRepository(db: Db): UserJobRepository {
       const row = await db.query.userJobs.findFirst({
         where: and(eq(userJobs.userId, userId), eq(userJobs.jobId, jobId)),
       });
-      return row ? { status: row.status, stage: row.stage } : undefined;
+      return row
+        ? { status: row.status, stage: row.stage, stageSince: row.stageChangedAt }
+        : undefined;
     },
 
     async setStatus(userId, jobId, status) {
       const applied = status === 'applied';
       await db
         .insert(userJobs)
-        .values({ userId, jobId, status, stage: applied ? 'applied' : null })
+        .values({
+          userId,
+          jobId,
+          status,
+          stage: applied ? 'applied' : null,
+          stageChangedAt: applied ? new Date() : null,
+        })
         .onConflictDoUpdate({
           target: [userJobs.userId, userJobs.jobId],
           set: {
             status,
             stage: applied ? sql`coalesce(${userJobs.stage}, 'applied')` : null,
+            // Keep counting from the existing stage; start the clock if there was none.
+            stageChangedAt: applied
+              ? sql`case when ${userJobs.stage} is null then now() else ${userJobs.stageChangedAt} end`
+              : null,
             updatedAt: new Date(),
           },
         });
@@ -198,10 +216,16 @@ export function createUserJobRepository(db: Db): UserJobRepository {
     async setStage(userId, jobId, stage) {
       await db
         .insert(userJobs)
-        .values({ userId, jobId, status: 'applied', stage })
+        .values({ userId, jobId, status: 'applied', stage, stageChangedAt: new Date() })
         .onConflictDoUpdate({
           target: [userJobs.userId, userJobs.jobId],
-          set: { status: 'applied', stage, updatedAt: new Date() },
+          set: {
+            status: 'applied',
+            stage,
+            stageChangedAt: sql`case when ${userJobs.stage} is distinct from excluded.stage
+              then now() else coalesce(${userJobs.stageChangedAt}, now()) end`,
+            updatedAt: new Date(),
+          },
         });
     },
 
@@ -215,7 +239,12 @@ export function createUserJobRepository(db: Db): UserJobRepository {
         where ${jobNotes.userId} = ${userJobs.userId} and ${jobNotes.jobId} = ${userJobs.jobId}
       )`;
       return db
-        .select({ job: jobs, stage: userJobs.stage, noteCount })
+        .select({
+          job: jobs,
+          stage: userJobs.stage,
+          stageSince: userJobs.stageChangedAt,
+          noteCount,
+        })
         .from(userJobs)
         .innerJoin(jobs, eq(userJobs.jobId, jobs.id))
         .where(and(eq(userJobs.userId, userId), eq(userJobs.status, status)))
