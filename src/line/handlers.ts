@@ -5,6 +5,7 @@ import { errorFields, httpStatusOf, type Logger } from '../lib/logger.js';
 import type { InterviewRepository } from '../interviews/repository.js';
 import type { JobRepository, UserJobRepository } from '../jobs/repository.js';
 import { extractAllUrls, extractUrl, type LinkPreviewer } from '../links/preview.js';
+import type { DigestRepository } from '../followups/repository.js';
 import type { JobDistances } from '../geo/service.js';
 import type { LinkImportRepository } from '../links/importRepository.js';
 import type { NoteRepository } from '../notes/repository.js';
@@ -28,11 +29,13 @@ import {
   REMINDER_OFF_WORDS,
   REMINDER_ON_WORDS,
 } from './interviews.js';
+import { createFollowUpFlows } from './followups.js';
 import { createJobActions } from './jobActions.js';
 import * as msg from './messages.js';
 import type { LineMessenger, OutgoingMessage } from './messenger.js';
 import { asPlaceNameFlow, createPlaceFlows, PLACE_NAME_FLOW, PLACE_WORDS } from './places.js';
 import { decodePostback, type PostbackData } from './postback.js';
+import { computeStats, statsMessage, STATS_WORDS } from './stats.js';
 import {
   asFlowState,
   createTracking,
@@ -62,6 +65,8 @@ export interface HandlerDeps {
   linkImports?: { repo: LinkImportRepository; kick: () => void };
   /** Look up the user's tracked job locations in the background (after adding a place). */
   warmDistances?: (user: User) => void;
+  /** Follow-up snoozes (the daily digest itself runs on a timer). */
+  digests?: DigestRepository;
 }
 
 export type EventsHandler = (events: webhook.Event[]) => Promise<void>;
@@ -104,6 +109,9 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
   const { users, prefs, sessions, line, logger } = deps;
   const jobActions = createJobActions(deps);
   const interviewFlows = createInterviewFlows(deps);
+  const followUps = createFollowUpFlows(deps);
+  const tz = deps.timeZone ?? 'Asia/Bangkok';
+  const clock = deps.now ?? (() => new Date());
   const tracking = createTracking({ ...deps, interviewLines: interviewFlows.linesForJob });
   const placeFlows = deps.places
     ? createPlaceFlows({
@@ -133,6 +141,11 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
     const existing = await prefs.get(user.id);
     if (existing) return [msg.currentPrefs(existing)];
     return applyWizard(user, startWizard());
+  }
+
+  async function showStats(user: User): Promise<OutgoingMessage[]> {
+    const rows = await deps.userJobs.overview(user.id);
+    return [statsMessage(computeStats(rows, clock(), tz))];
   }
 
   async function onFollow(lineUserId: string): Promise<OutgoingMessage[]> {
@@ -183,6 +196,8 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
           return [msg.helpMessage()];
         case 'interviews':
           return interviewFlows.list(user);
+        case 'stats':
+          return showStats(user);
         default:
           return [msg.comingSoon(pb.m ?? '')];
       }
@@ -219,6 +234,12 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
     if (pb?.a === 'stage' && pb.v && pb.j) {
       await sessions.clear(user.id);
       return tracking.setStage(user, pb.j, pb.v);
+    }
+    if (pb?.a === 'fu' && pb.j) {
+      await sessions.clear(user.id);
+      if (pb.v === 'draft') return followUps.draft(user, pb.j);
+      if (pb.v === 'snooze') return followUps.snooze(user, pb.j);
+      return [msg.notUnderstood()];
     }
     if (pb?.a === 'title') {
       await sessions.clear(user.id);
@@ -297,6 +318,7 @@ export function createEventsHandler(deps: HandlerDeps): EventsHandler {
       if (FEED_WORDS.includes(lower)) return showFeed(user, 1);
       if (HELP_WORDS.includes(lower)) return [msg.helpMessage()];
       if (INTERVIEW_WORDS.includes(lower)) return interviewFlows.list(user);
+      if (STATS_WORDS.includes(lower)) return showStats(user);
       if (PLACE_WORDS.includes(lower) && placeFlows) return placeFlows.show(user);
       if (REMINDER_OFF_WORDS.includes(lower)) return interviewFlows.setReminders(user, false);
       if (REMINDER_ON_WORDS.includes(lower)) return interviewFlows.setReminders(user, true);

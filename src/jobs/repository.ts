@@ -35,6 +35,17 @@ export interface ListedJob {
   noteCount: number;
 }
 
+/** One tracked job, reduced to what the overview stats need. */
+export interface OverviewRow {
+  status: UserJobStatus;
+  stage: ApplicationStage | null;
+  stageSince: Date | null;
+  appliedAt: Date | null;
+  respondedAt: Date | null;
+  /** false once the posting has closed. */
+  active: boolean;
+}
+
 export interface JobRepository {
   upsertListings(listings: JobListing[], seenAt: Date): Promise<void>;
   /** Deactivate a board's jobs that weren't seen in the run that started at `seenAt`. */
@@ -67,6 +78,8 @@ export interface UserJobRepository {
   /** Most recently updated first. */
   list(userId: string, status: UserJobStatus, limit: number, offset?: number): Promise<ListedJob[]>;
   count(userId: string, status: UserJobStatus): Promise<number>;
+  /** Every job the user tracks, for the overview stats. */
+  overview(userId: string): Promise<OverviewRow[]>;
   /** How many other users have this job in any list. */
   otherTrackers(userId: string, jobId: string): Promise<number>;
 }
@@ -198,6 +211,7 @@ export function createUserJobRepository(db: Db): UserJobRepository {
           status,
           stage: applied ? 'applied' : null,
           stageChangedAt: applied ? new Date() : null,
+          appliedAt: applied ? new Date() : null,
         })
         .onConflictDoUpdate({
           target: [userJobs.userId, userJobs.jobId],
@@ -208,6 +222,7 @@ export function createUserJobRepository(db: Db): UserJobRepository {
             stageChangedAt: applied
               ? sql`case when ${userJobs.stage} is null then now() else ${userJobs.stageChangedAt} end`
               : null,
+            ...(applied ? { appliedAt: sql`coalesce(${userJobs.appliedAt}, now())` } : {}),
             updatedAt: new Date(),
           },
         });
@@ -216,7 +231,15 @@ export function createUserJobRepository(db: Db): UserJobRepository {
     async setStage(userId, jobId, stage) {
       await db
         .insert(userJobs)
-        .values({ userId, jobId, status: 'applied', stage, stageChangedAt: new Date() })
+        .values({
+          userId,
+          jobId,
+          status: 'applied',
+          stage,
+          stageChangedAt: new Date(),
+          appliedAt: new Date(),
+          respondedAt: stage === 'applied' ? null : new Date(),
+        })
         .onConflictDoUpdate({
           target: [userJobs.userId, userJobs.jobId],
           set: {
@@ -224,6 +247,10 @@ export function createUserJobRepository(db: Db): UserJobRepository {
             stage,
             stageChangedAt: sql`case when ${userJobs.stage} is distinct from excluded.stage
               then now() else coalesce(${userJobs.stageChangedAt}, now()) end`,
+            appliedAt: sql`coalesce(${userJobs.appliedAt}, now())`,
+            // The first move past "applied" means the company got back to them.
+            respondedAt: sql`case when excluded.stage <> 'applied'
+              then coalesce(${userJobs.respondedAt}, now()) else ${userJobs.respondedAt} end`,
             updatedAt: new Date(),
           },
         });
@@ -252,6 +279,20 @@ export function createUserJobRepository(db: Db): UserJobRepository {
         .limit(limit)
         .offset(offset);
     },
+
+    overview: (userId) =>
+      db
+        .select({
+          status: userJobs.status,
+          stage: userJobs.stage,
+          stageSince: userJobs.stageChangedAt,
+          appliedAt: userJobs.appliedAt,
+          respondedAt: userJobs.respondedAt,
+          active: jobs.active,
+        })
+        .from(userJobs)
+        .innerJoin(jobs, eq(userJobs.jobId, jobs.id))
+        .where(eq(userJobs.userId, userId)),
 
     async otherTrackers(userId, jobId) {
       const [row] = await db

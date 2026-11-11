@@ -12,6 +12,8 @@ import { createEventsHandler } from './line/handlers.js';
 import { createLineMessenger } from './line/messenger.js';
 import { createInterviewRepository } from './interviews/repository.js';
 import { startReminderScheduler } from './interviews/reminders.js';
+import { startDigestScheduler } from './followups/digest.js';
+import { createDigestRepository } from './followups/repository.js';
 import { createLinkPreviewer } from './links/preview.js';
 import { createLinkImportRepository } from './links/importRepository.js';
 import { createLinkImportWorker } from './links/importWorker.js';
@@ -46,6 +48,7 @@ const interviews = createInterviewRepository(db);
 const previewLink = createLinkPreviewer();
 const userJobs = createUserJobRepository(db);
 const places = createPlaceRepository(db);
+const digests = createDigestRepository(db);
 
 // Messages with many links are saved in the background, then summarised in one push.
 const linkImportRepo = createLinkImportRepository(db);
@@ -97,6 +100,7 @@ const app = createApp({
     distances,
     warmDistances,
     linkImports: { repo: linkImportRepo, kick: () => linkImports.kick() },
+    digests,
     timeZone: env.APP_TIMEZONE,
     line,
     logger,
@@ -140,11 +144,17 @@ const stopReminders = env.REMINDERS
     )
   : () => {};
 
+// Once a day per user: follow-up nudges and saved jobs that closed (checked every 15 minutes).
+const stopDigest = env.REMINDERS
+  ? startDigestScheduler({ digests, line, logger, timeZone: env.APP_TIMEZONE }, 15 * 60 * 1000)
+  : () => {};
+
 async function shutdown(signal: string): Promise<void> {
   logger.info('Shutting down', { signal });
   stopJobSync();
   linkImports.stop();
   stopReminders();
+  stopDigest();
   server.close();
   try {
     await sql.end({ timeout: 5 });

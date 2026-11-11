@@ -3,6 +3,7 @@ import type { webhook } from '@line/bot-sdk';
 import { vi } from 'vitest';
 import type { SessionRepository } from '../src/conversation/repository.js';
 import type { Geocode, Interview, Job, User, UserPlace } from '../src/db/schema.js';
+import type { DigestRepository } from '../src/followups/repository.js';
 import type { Point } from '../src/geo/distance.js';
 import type { GeocodeRepository } from '../src/geo/repository.js';
 import { createGeoService, createJobDistances } from '../src/geo/service.js';
@@ -42,6 +43,8 @@ function newUser(lineUserId: string): User {
     language: null,
     status: 'active',
     notifyInterviewReminders: true,
+    notifyFollowUps: true,
+    lastDigestAt: null,
     pdpaConsentedAt: null,
     followedAt: null,
     unfollowedAt: null,
@@ -82,7 +85,12 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
       for (const u of usersByLineId.values()) if (u.id === userId) u.pdpaConsentedAt = new Date();
     },
     async setReminders(userId, on) {
-      for (const u of usersByLineId.values()) if (u.id === userId) u.notifyInterviewReminders = on;
+      for (const u of usersByLineId.values()) {
+        if (u.id === userId) {
+          u.notifyInterviewReminders = on;
+          u.notifyFollowUps = on;
+        }
+      }
     },
     async deleteByLineUserId(lineUserId) {
       const u = usersByLineId.get(lineUserId);
@@ -107,7 +115,14 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
   const jobRows = new Map<string, Job>();
   const userJobRows = new Map<
     string,
-    { status: UserJobStatus; stage: ApplicationStage | null; since: Date | null; at: number }
+    {
+      status: UserJobStatus;
+      stage: ApplicationStage | null;
+      since: Date | null;
+      at: number;
+      appliedAt?: Date | null;
+      respondedAt?: Date | null;
+    }
   >();
   const noteRows: { userId: string; jobId: string; body: string; at: number }[] = [];
   const ujKey = (userId: string, jobId: string) => `${userId}:${jobId}`;
@@ -156,12 +171,28 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
       const applied = status === 'applied';
       const stage = applied ? (prev?.stage ?? 'applied') : null;
       const since = applied ? (prev?.stage ? prev.since : now()) : null;
-      userJobRows.set(ujKey(userId, jobId), { status, stage, since, at: ++tick });
+      const appliedAt = applied ? (prev?.appliedAt ?? now()) : (prev?.appliedAt ?? null);
+      userJobRows.set(ujKey(userId, jobId), {
+        status,
+        stage,
+        since,
+        at: ++tick,
+        appliedAt,
+        respondedAt: prev?.respondedAt ?? null,
+      });
     },
     async setStage(userId, jobId, stage) {
       const prev = userJobRows.get(ujKey(userId, jobId));
       const since = prev?.stage === stage ? (prev.since ?? now()) : now();
-      userJobRows.set(ujKey(userId, jobId), { status: 'applied', stage, since, at: ++tick });
+      userJobRows.set(ujKey(userId, jobId), {
+        status: 'applied',
+        stage,
+        since,
+        at: ++tick,
+        appliedAt: prev?.appliedAt ?? now(),
+        respondedAt:
+          stage === 'applied' ? (prev?.respondedAt ?? null) : (prev?.respondedAt ?? now()),
+      });
     },
     clear: async (userId, jobId) => void userJobRows.delete(ujKey(userId, jobId)),
     async list(userId, status, limit, offset = 0) {
@@ -178,6 +209,18 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
             noteCount: noteRows.filter((n) => n.userId === userId && n.jobId === jobId).length,
           };
         });
+    },
+    async overview(userId) {
+      return [...userJobRows.entries()]
+        .filter(([k]) => k.startsWith(`${userId}:`))
+        .map(([k, v]) => ({
+          status: v.status,
+          stage: v.stage,
+          stageSince: v.since,
+          appliedAt: v.appliedAt ?? null,
+          respondedAt: v.respondedAt ?? null,
+          active: jobRows.get(k.split(':')[1]!)?.active ?? true,
+        }));
     },
     async otherTrackers(userId, jobId) {
       return [...userJobRows.keys()].filter(
@@ -417,6 +460,20 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
   };
   const kickImports = vi.fn();
 
+  /** Snoozed follow-ups, by "userId:jobId". The digest itself is tested on its own. */
+  const snoozes = new Map<string, Date>();
+  const digests: DigestRepository = {
+    dueUsers: async () => [],
+    claimUser: async () => true,
+    claimFollowUps: async () => [],
+    claimClosed: async () => [],
+    async snooze(userId, jobId, until) {
+      if (userJobRows.get(ujKey(userId, jobId))?.status !== 'applied') return false;
+      snoozes.set(ujKey(userId, jobId), until);
+      return true;
+    },
+  };
+
   const replies: OutgoingMessage[][] = [];
   const line = {
     reply: vi.fn(async (_token: string, messages: OutgoingMessage[]) => {
@@ -440,6 +497,7 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
     places,
     distances,
     warmDistances: () => {},
+    digests,
     users,
     prefs,
     sessions,
@@ -488,6 +546,7 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
     placeRows,
     importRows,
     kickImports,
+    snoozes,
     /** Runs the background link queue until it's empty. */
     drainImports: () => importWorker.drain(),
     geocodeRows,

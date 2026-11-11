@@ -8,6 +8,11 @@
   - Applying never gets downgraded by re-saving the job.
   - Sending a link that is already saved or applied counts as a duplicate: the bot reports it and doesn't save it again.
   - `stage_changed_at` records when the current stage began; the bot shows "N days" in it. It restarts only when the stage actually changes. Each stage offers its likely next steps as buttons (applied -> contacted -> book interview / interviewed -> waiting -> offer / rejected).
+- **Daily digest** (`src/followups`): at most one push per user per local day, 10:00-20:00.
+  - Follow-ups: an application that has been at applied / contacted / waiting for 7 days gets one nudge per stage. Changing the stage or tapping snooze (7 days) sets a new due day. Compared by local calendar day.
+  - Closed jobs: a saved (not applied) synced job that went inactive is reported once (`closed_notified_at`).
+  - The day is claimed in `users.last_digest_at` before anything is sent. `ปิดเตือน` turns off both interview reminders and the digest.
+- **Overview stats** (`สรุป`): counts per stage, reply rate and average days to reply, from `user_jobs.applied_at` / `responded_at`. `responded_at` is set the first time an application moves past applied (a rejection counts). Rows from before migration 0007 have estimated times.
 - **Link imports**: a message with more than 10 links is queued (`link_imports`, one batch per message) and saved in the background, one page per site per second. Each user gets one push summary once all their queued links are done; the batches are then deleted. A user can have at most 2,000 queued links.
 - **Places**: up to 5 per user (home, condo...), saved from a shared LINE location. They're used only for straight-line distances to jobs and never sent anywhere.
 - **Geocodes** cache job-location text to coordinates, shared by all users. Province-level matches are stored as "not found", since they say nothing useful about a commute.

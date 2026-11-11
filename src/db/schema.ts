@@ -26,6 +26,10 @@ export const users = pgTable('users', {
   status: userStatus('status').notNull().default('active'),
   /** Interview reminders are the only Push messages sent by default (Push counts against quota). */
   notifyInterviewReminders: boolean('notify_interview_reminders').notNull().default(true),
+  /** The daily digest: follow-up nudges and saved jobs that closed (also a push). */
+  notifyFollowUps: boolean('notify_follow_ups').notNull().default(true),
+  /** When the last daily digest was claimed; at most one digest per local day. */
+  lastDigestAt: timestamp('last_digest_at', { withTimezone: true }),
   pdpaConsentedAt: timestamp('pdpa_consented_at', { withTimezone: true }),
   followedAt: timestamp('followed_at', { withTimezone: true }),
   unfollowedAt: timestamp('unfollowed_at', { withTimezone: true }),
@@ -151,6 +155,16 @@ export const userJobs = pgTable(
     stage: applicationStage('stage'),
     /** When the current stage began; the bot counts days from here ("waiting 5 days"). */
     stageChangedAt: timestamp('stage_changed_at', { withTimezone: true }),
+    /** When the user first marked the job applied (for the overview stats). */
+    appliedAt: timestamp('applied_at', { withTimezone: true }),
+    /** When the application first moved past "applied" (the company got back, even with a no). */
+    respondedAt: timestamp('responded_at', { withTimezone: true }),
+    /** Last follow-up nudge for this application. */
+    followUpSentAt: timestamp('follow_up_sent_at', { withTimezone: true }),
+    /** "Remind me later": no nudge before this. */
+    followUpSnoozedUntil: timestamp('follow_up_snoozed_until', { withTimezone: true }),
+    /** When we told the user this saved job's posting had closed. */
+    closedNotifiedAt: timestamp('closed_notified_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .notNull()

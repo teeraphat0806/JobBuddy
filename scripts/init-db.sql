@@ -162,6 +162,19 @@ CREATE INDEX "link_imports_status_idx" ON "link_imports" USING btree ("status","
 CREATE INDEX "link_imports_batch_idx" ON "link_imports" USING btree ("batch_id");
 CREATE INDEX "link_imports_user_status_idx" ON "link_imports" USING btree ("user_id","status");
 
+-- 0007_followups_and_stats
+ALTER TABLE "user_jobs" ADD COLUMN "applied_at" timestamp with time zone;
+ALTER TABLE "user_jobs" ADD COLUMN "responded_at" timestamp with time zone;
+ALTER TABLE "user_jobs" ADD COLUMN "follow_up_sent_at" timestamp with time zone;
+ALTER TABLE "user_jobs" ADD COLUMN "follow_up_snoozed_until" timestamp with time zone;
+ALTER TABLE "user_jobs" ADD COLUMN "closed_notified_at" timestamp with time zone;
+ALTER TABLE "users" ADD COLUMN "notify_follow_ups" boolean DEFAULT true NOT NULL;
+ALTER TABLE "users" ADD COLUMN "last_digest_at" timestamp with time zone;
+-- Backfill for the overview stats. Exact times weren't kept before, so these are the best guesses:
+-- the stage start for jobs still at "applied", otherwise when the job was first tracked.
+UPDATE "user_jobs" SET "applied_at" = CASE WHEN "stage" = 'applied' THEN coalesce("stage_changed_at", "created_at") ELSE "created_at" END WHERE "status" = 'applied';
+UPDATE "user_jobs" SET "responded_at" = coalesce("stage_changed_at", "updated_at") WHERE "status" = 'applied' AND "stage" IS NOT NULL AND "stage" <> 'applied';
+
 CREATE SCHEMA IF NOT EXISTS drizzle;
 CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
   id SERIAL PRIMARY KEY,
@@ -175,6 +188,7 @@ INSERT INTO drizzle.__drizzle_migrations (hash, created_at) VALUES
   ('7f70905c458d98678c246b5c1c6f116645ca824345eb978e25a8a8749ab68807', 1794292167557),
   ('5eebfe124dd42029b3e8868bd913f581595897fde6a22d0723e217ae4f429c34', 1794293147776),
   ('ff1c9259f6ee7ea24c6e636a217cd114e3b709a81771888771492680a47a4e08', 1794370015409),
-  ('8be86f66fe0f8b851eea2681c5300ff2c7a2d304e0c2c991f038c38aaad67977', 1794372543157);
+  ('8be86f66fe0f8b851eea2681c5300ff2c7a2d304e0c2c991f038c38aaad67977', 1794372543157),
+  ('330219a35b7c4eb885d0d15b84b27f9270d16b17d695a9a98ffe6a2132858dc2', 1794390754416);
 
 COMMIT;
