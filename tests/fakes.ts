@@ -372,14 +372,16 @@ export function createFakeBot(opts: { now?: () => Date } = {}) {
         lat: r?.lat ?? null,
         lng: r?.lng ?? null,
         label: r?.label ?? null,
+        placeRank: r?.rank ?? null,
         resolvedAt: now(),
       });
     },
   };
-  const geoPoints = new Map<string, Point>();
+  /** Geocoded points; `rank` defaults to a district (too coarse to name a station). */
+  const geoPoints = new Map<string, Point & { rank?: number }>();
   const geocoder = vi.fn(async (q: string) => {
     const p = geoPoints.get(q);
-    return p ? { ...p, label: q } : null;
+    return p ? { rank: 12, ...p, label: q } : null;
   });
   const geo = createGeoService({ geocodes: geocodeRepo, geocoder, logger: silentLogger, now });
   const distances = createJobDistances({ places, geo });

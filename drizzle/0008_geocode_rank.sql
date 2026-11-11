@@ -1,0 +1,1 @@
+ALTER TABLE "geocodes" ADD COLUMN "place_rank" integer;

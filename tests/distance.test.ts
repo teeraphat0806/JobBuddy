@@ -91,7 +91,36 @@ describe('Nominatim geocoder', () => {
       lat: 13.77,
       lng: 100.57,
       label: 'Huai Khwang',
+      rank: 12,
     });
+  });
+
+  it('picks the hit named like the text, and distrusts a landmark that only shares the address', async () => {
+    const station = {
+      lat: '13.74',
+      lon: '100.52',
+      place_rank: 30,
+      namedetails: { name: 'กรุงเทพ', 'name:en': 'Bangkok Railway Station' },
+    };
+    const district = {
+      lat: '13.74',
+      lon: '100.53',
+      place_rank: 12,
+      namedetails: { name: 'เขตปทุมวัน', 'name:en': 'Pathum Wan District' },
+    };
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      const u = new URL(String(url));
+      expect(u.searchParams.get('namedetails')).toBe('1');
+      return reply(u.searchParams.get('q') === 'pathum wan' ? [station, district] : [station]);
+    });
+    const g = createNominatimGeocoder({
+      userAgent: 'x',
+      fetchImpl: fetchImpl as typeof fetch,
+      minIntervalMs: 0,
+    });
+    expect(await g('pathum wan')).toMatchObject({ lng: 100.53, rank: 12 });
+    // No hit is named like the text: keep the first, but only as a neighbourhood.
+    expect(await g('rong mueang')).toMatchObject({ lng: 100.52, rank: 16 });
   });
 
   it('retries with the first part when the full text is not found', async () => {

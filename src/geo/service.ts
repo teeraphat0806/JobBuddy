@@ -3,6 +3,7 @@ import type { Logger } from '../lib/logger.js';
 import { errorFields } from '../lib/logger.js';
 import type { PlaceRepository } from '../places/repository.js';
 import { describeDistances, type Point } from './distance.js';
+import { describeStation, type RankedPoint } from './stations.js';
 import { geoQuery, type Geocoder } from './geocoder.js';
 import type { GeocodeRepository } from './repository.js';
 
@@ -13,9 +14,9 @@ const MAX_PENDING = 200;
 
 export interface GeoService {
   /** Points for job locations from the cache only; unknown ones are looked up in the background. */
-  cached(locations: string[]): Promise<Map<string, Point | null>>;
+  cached(locations: string[]): Promise<Map<string, RankedPoint | null>>;
   /** One location, looked up now if it isn't cached (a single request). */
-  resolve(location: string): Promise<Point | null>;
+  resolve(location: string): Promise<RankedPoint | null>;
   /** Resolves when no background lookups are pending (tests, shutdown). */
   idle(): Promise<void>;
 }
@@ -35,10 +36,19 @@ export function createGeoService(deps: GeoServiceDeps): GeoService {
   const fresh = (resolvedAt: Date, found: boolean) =>
     found || now().getTime() - resolvedAt.getTime() < RETRY_MISSES_MS;
 
-  async function lookupAndStore(query: string): Promise<Point | null> {
-    const result = await deps.geocoder(query);
-    await deps.geocodes.put(query, result);
-    return result ? { lat: result.lat, lng: result.lng } : null;
+  /** Lookups in progress, so callers asking for the same place at once share one request. */
+  const inFlight = new Map<string, Promise<RankedPoint | null>>();
+
+  function lookupAndStore(query: string): Promise<RankedPoint | null> {
+    const running = inFlight.get(query);
+    if (running) return running;
+    const run = (async () => {
+      const result = await deps.geocoder(query);
+      await deps.geocodes.put(query, result);
+      return result ? { lat: result.lat, lng: result.lng, rank: result.rank } : null;
+    })().finally(() => inFlight.delete(query));
+    inFlight.set(query, run);
+    return run;
   }
 
   function enqueue(queries: string[]) {
@@ -61,12 +71,15 @@ export function createGeoService(deps: GeoServiceDeps): GeoService {
 
   async function cachedByQuery(queries: string[]) {
     const rows = await deps.geocodes.getMany([...new Set(queries)]);
-    const out = new Map<string, Point | null>();
+    const out = new Map<string, RankedPoint | null>();
     const missing: string[] = [];
     for (const q of new Set(queries)) {
       const row = rows.get(q);
       if (row && fresh(row.resolvedAt, row.lat !== null)) {
-        out.set(q, row.lat !== null && row.lng !== null ? { lat: row.lat, lng: row.lng } : null);
+        const found = row.lat !== null && row.lng !== null;
+        out.set(q, found ? { lat: row.lat!, lng: row.lng!, rank: row.placeRank } : null);
+        // Found before we kept the rank: still usable, but look it up again for the rank.
+        if (found && row.placeRank === null) missing.push(q);
       } else {
         missing.push(q);
       }
@@ -83,7 +96,7 @@ export function createGeoService(deps: GeoServiceDeps): GeoService {
       }
       const { out, missing } = await cachedByQuery([...keyOf.values()]);
       enqueue(missing);
-      const result = new Map<string, Point | null>();
+      const result = new Map<string, RankedPoint | null>();
       for (const [loc, q] of keyOf) if (out.has(q)) result.set(loc, out.get(q)!);
       return result;
     },
@@ -91,8 +104,11 @@ export function createGeoService(deps: GeoServiceDeps): GeoService {
     async resolve(location) {
       const q = geoQuery(location);
       if (!q) return null;
-      const { out } = await cachedByQuery([q]);
-      if (out.has(q)) return out.get(q)!;
+      const { out, missing } = await cachedByQuery([q]);
+      if (out.has(q)) {
+        enqueue(missing);
+        return out.get(q)!;
+      }
       try {
         return await lookupAndStore(q);
       } catch (err) {
@@ -114,6 +130,10 @@ export interface JobDistances {
   forJobs(userId: string, jobs: JobPlace[]): Promise<Map<string, string>>;
   /** One job, looking its place up now if needed. null: no places set, remote, or unknown. */
   forJob(userId: string, job: JobPlace): Promise<{ text: string; to: Point } | null>;
+  /** "ใกล้ BTS อโศก" / "BTS อโศก ~350 ม." per job id, from cached locations only. */
+  stationsFor(jobs: JobPlace[]): Promise<Map<string, string>>;
+  /** One job's nearest station, looking its place up now if needed. */
+  stationFor(job: JobPlace): Promise<string | null>;
 }
 
 /** Distances from the user's saved places (home, condo...) to jobs. Straight-line only. */
@@ -143,6 +163,23 @@ export function createJobDistances(deps: {
       if (places.length === 0) return null;
       const to = await deps.geo.resolve(job.location);
       return to ? { text: describeDistances(places, to), to } : null;
+    },
+
+    async stationsFor(jobs) {
+      const out = new Map<string, string>();
+      const targets = jobs.filter(located);
+      if (targets.length === 0) return out;
+      const points = await deps.geo.cached(targets.map((j) => j.location));
+      for (const j of targets) {
+        const text = describeStation(j.location, points.get(j.location) ?? null);
+        if (text) out.set(j.id, text);
+      }
+      return out;
+    },
+
+    async stationFor(job) {
+      if (!located(job)) return null;
+      return describeStation(job.location, await deps.geo.resolve(job.location));
     },
   };
 }

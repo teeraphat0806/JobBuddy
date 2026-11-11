@@ -64,12 +64,18 @@ export function createLinkImportWorker(deps: ImportWorkerDeps) {
   const interval = deps.perSiteIntervalMs ?? 1000;
   const nextSlot = new Map<string, number>();
 
-  /** Waits for this site's next free slot, reserving it first so parallel callers queue up. */
+  /**
+   * Waits until a full interval has passed since this site's last request. Counted from when the
+   * request really started (timers can fire late), so two requests are never closer than that.
+   * A site is only ever worked on by one lane, so there is no race for its slot.
+   */
   async function waitForSite(host: string) {
-    const now = Date.now();
-    const at = Math.max(now, nextSlot.get(host) ?? 0);
-    nextSlot.set(host, at + interval);
-    if (at > now) await new Promise((r) => setTimeout(r, at - now));
+    for (;;) {
+      const wait = (nextSlot.get(host) ?? 0) - Date.now();
+      if (wait <= 0) break;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+    nextSlot.set(host, Date.now() + interval);
   }
 
   async function processOne(item: ClaimedImport) {

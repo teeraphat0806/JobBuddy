@@ -58,8 +58,8 @@ describe('link import worker', () => {
 
     const a = calls.filter((c) => c.url.includes('a.example')).map((c) => c.at);
     expect(a).toHaveLength(3);
-    expect(a[1]! - a[0]!).toBeGreaterThanOrEqual(55);
-    expect(a[2]! - a[1]!).toBeGreaterThanOrEqual(55);
+    expect(a[1]! - a[0]!).toBeGreaterThanOrEqual(60);
+    expect(a[2]! - a[1]!).toBeGreaterThanOrEqual(60);
     // b.example didn't wait behind a.example.
     const b = calls.find((c) => c.url.includes('b.example'))!.at;
     expect(b - a[0]!).toBeLessThan(50);

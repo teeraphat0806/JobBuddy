@@ -151,10 +151,14 @@ export function createTracking(deps: TrackingDeps) {
 
   async function card(user: User, job: Job, entry: UserJobEntry | undefined) {
     const variant = entry?.status === 'applied' ? 'applied' : 'saved';
-    const distance = await deps.distances?.forJob(user.id, job);
+    const [distance, station] = await Promise.all([
+      deps.distances?.forJob(user.id, job),
+      deps.distances?.stationFor(job),
+    ]);
     const cardJob: CardJob = {
       ...job,
       distanceText: distance?.text,
+      stationText: station ?? undefined,
       stage: entry?.stage ?? null,
       stageText: entry?.status === 'applied' ? statusOf(entry) : undefined,
       noteCount: await notes.count(user.id, job.id),
@@ -287,12 +291,14 @@ export function createTracking(deps: TrackingDeps) {
     const out: OutgoingMessage[] = [text(summary, [savedListButton])];
     if (added.length) {
       // Cards only for what was just saved; duplicates are already in the user's lists.
-      const [counts, distances] = await Promise.all([
+      const [counts, distances, stations] = await Promise.all([
         Promise.all(added.map((r) => notes.count(user.id, r.job.id))),
         deps.distances?.forJobs(
           user.id,
           added.map((r) => r.job),
         ) ?? Promise.resolve(new Map<string, string>()),
+        deps.distances?.stationsFor(added.map((r) => r.job)) ??
+          Promise.resolve(new Map<string, string>()),
       ]);
       out.push({
         type: 'flex',
@@ -306,6 +312,7 @@ export function createTracking(deps: TrackingDeps) {
                 stage: r.entry.stage,
                 noteCount: counts[i] ?? 0,
                 distanceText: distances.get(r.job.id),
+                stationText: stations.get(r.job.id),
               },
               'saved',
               {
@@ -433,17 +440,19 @@ export function createTracking(deps: TrackingDeps) {
   async function detail(user: User, jobId: string): Promise<OutgoingMessage[]> {
     const job = await jobs.getById(jobId);
     if (!job) return notFound();
-    const [entry, list, total, ivLines, distance] = await Promise.all([
+    const [entry, list, total, ivLines, distance, station] = await Promise.all([
       userJobs.get(user.id, job.id),
       notes.list(user.id, job.id, DETAIL_NOTES),
       notes.count(user.id, job.id),
       deps.interviewLines?.(user, job.id) ?? Promise.resolve([]),
       deps.distances?.forJob(user.id, job) ?? Promise.resolve(null),
+      deps.distances?.stationFor(job) ?? Promise.resolve(null),
     ]);
 
     const lines = [`💼 ${job.title}`, `🏢 ${job.company}`];
     if (job.location) lines.push(`📍 ${job.location}`);
     if (distance) lines.push(`📏 ${distance.text} (เส้นตรง)`);
+    if (station) lines.push(`🚇 ${station}`);
     if (entry?.status === 'applied') lines.push(`สถานะ: ${statusOf(entry)}`);
     else if (entry?.status === 'saved') lines.push('สถานะ: ⭐ เก็บไว้');
     lines.push(...ivLines);

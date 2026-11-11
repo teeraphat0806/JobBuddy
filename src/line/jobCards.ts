@@ -20,6 +20,8 @@ export interface CardJob {
   stageText?: string;
   /** How far it is from the user's places, e.g. "บ้าน ~12 กม.". */
   distanceText?: string;
+  /** Nearest rail station, e.g. "BTS อโศก ~350 ม.". */
+  stationText?: string;
   noteCount?: number;
 }
 
@@ -135,6 +137,7 @@ export function jobBubble(
   ];
   if (job.location) body.push(infoLine('📍', job.location));
   if (job.distanceText) body.push(infoLine('📏', job.distanceText));
+  if (job.stationText) body.push(infoLine('🚇', job.stationText));
   if (job.department) body.push(infoLine('🏷️', job.department));
   if (variant === 'applied' && job.stage) {
     body.push({

@@ -43,6 +43,8 @@ export function createJobActions(deps: JobActionDeps) {
   const now = deps.now ?? (() => new Date());
   const distancesFor = (user: User, list: Parameters<JobDistances['forJobs']>[1]) =>
     deps.distances?.forJobs(user.id, list) ?? Promise.resolve(new Map<string, string>());
+  const stationsFor = (list: Parameters<JobDistances['stationsFor']>[0]) =>
+    deps.distances?.stationsFor(list) ?? Promise.resolve(new Map<string, string>());
 
   /** "งานใหม่วันนี้": jobs matching the user's preferences, excluding ones they acted on. */
   async function feed(user: User, page: number): Promise<OutgoingMessage[] | 'needs-prefs'> {
@@ -72,10 +74,13 @@ export function createJobActions(deps: JobActionDeps) {
       return [text('ดูครบทุกงานแล้วครับ 🎉 กลับมาดูใหม่พรุ่งนี้นะ', [feedButton])];
     }
     const hasMore = start + FEED_PAGE_SIZE < ranked.length;
-    const distances = await distancesFor(
-      user,
-      slice.map((r) => r.job),
-    );
+    const [distances, stations] = await Promise.all([
+      distancesFor(
+        user,
+        slice.map((r) => r.job),
+      ),
+      stationsFor(slice.map((r) => r.job)),
+    ]);
     const companies = new Set(all.map((j) => j.company)).size;
 
     const header =
@@ -88,7 +93,11 @@ export function createJobActions(deps: JobActionDeps) {
       text(header),
       jobCarousel(
         slice.map((r) => ({
-          job: { ...r.job, distanceText: distances.get(r.job.id) },
+          job: {
+            ...r.job,
+            distanceText: distances.get(r.job.id),
+            stationText: stations.get(r.job.id),
+          },
           isNew: r.isNew,
         })),
         'feed',
@@ -125,15 +134,19 @@ export function createJobActions(deps: JobActionDeps) {
     const pages = Math.ceil(total / size);
     const page = Math.min(Math.max(1, requestedPage), pages);
     const listed = await userJobs.list(user.id, status, size, (page - 1) * size);
-    const distances = await distancesFor(
-      user,
-      listed.map((i) => i.job),
-    );
+    const [distances, stations] = await Promise.all([
+      distancesFor(
+        user,
+        listed.map((i) => i.job),
+      ),
+      stationsFor(listed.map((i) => i.job)),
+    ]);
     const at = now();
     const items = listed.map((i) => ({
       ...i,
       stageText: i.stage ? stageStatus(i.stage, i.stageSince, at, timeZone) : undefined,
       distanceText: distances.get(i.job.id),
+      stationText: stations.get(i.job.id),
     }));
 
     if (view === 'list') return [jobListMessage(items, status, { total, page })];
@@ -150,8 +163,8 @@ export function createJobActions(deps: JobActionDeps) {
         nav,
       ),
       jobCarousel(
-        items.map(({ job, stage, stageText, distanceText, noteCount }) => ({
-          job: { ...job, stage, stageText, distanceText, noteCount },
+        items.map(({ job, stage, stageText, distanceText, stationText, noteCount }) => ({
+          job: { ...job, stage, stageText, distanceText, stationText, noteCount },
         })),
         status,
         {

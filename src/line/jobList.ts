@@ -38,7 +38,11 @@ function navButton(label: string, data: PostbackData): messagingApi.FlexButton {
 }
 
 /** A list row, with the stage's day count and distances already worked out. */
-export type ListRow = ListedJob & { stageText?: string; distanceText?: string };
+export type ListRow = ListedJob & {
+  stageText?: string;
+  distanceText?: string;
+  stationText?: string;
+};
 
 function row(item: ListRow, n: number): messagingApi.FlexBox {
   const { job, stage, noteCount } = item;
@@ -46,6 +50,7 @@ function row(item: ListRow, n: number): messagingApi.FlexBox {
   if (stage) meta.push(item.stageText ?? STAGE_LABEL[stage]);
   // Nearest place only: rows are short.
   if (item.distanceText) meta.push(`📏 ${item.distanceText.split(' · ')[0]}`);
+  if (item.stationText) meta.push(`🚇 ${item.stationText}`);
   if (noteCount) meta.push(`📝 ${noteCount}`);
   if (!job.active) meta.push('⛔ ปิดรับ');
   return {

@@ -3,6 +3,8 @@ import type { Point } from './distance.js';
 export interface GeocodeResult extends Point {
   /** What was matched, e.g. "เขตห้วยขวาง, กรุงเทพมหานคร". */
   label: string;
+  /** Nominatim place_rank: how precise the match is (see geo/stations.ts). */
+  rank: number;
 }
 
 /** Turns a place name into coordinates; null when not found or too coarse to be useful. */
@@ -35,11 +37,17 @@ export function geoQuery(location: string): string | null {
  */
 const MIN_PLACE_RANK = 12;
 
+/** A match we can't tie to the text by name is trusted only this far (a neighbourhood). */
+const NEIGHBOURHOOD_RANK = 16;
+
 interface NominatimHit {
   lat?: string;
   lon?: string;
   place_rank?: number;
   display_name?: string;
+  name?: string;
+  /** The place's own names: name, name:en, name:th... */
+  namedetails?: Record<string, string>;
 }
 
 export interface NominatimOptions {
@@ -64,7 +72,7 @@ export function createNominatimGeocoder(opts: NominatimOptions): Geocoder {
   let queue: Promise<unknown> = Promise.resolve();
   let lastAt = 0;
 
-  async function search(q: string): Promise<NominatimHit | null> {
+  async function search(q: string): Promise<NominatimHit[]> {
     const wait = lastAt + minInterval - Date.now();
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
     lastAt = Date.now();
@@ -72,7 +80,8 @@ export function createNominatimGeocoder(opts: NominatimOptions): Geocoder {
     url.search = new URLSearchParams({
       q,
       format: 'jsonv2',
-      limit: '1',
+      limit: '5',
+      namedetails: '1',
       countrycodes: 'th',
       'accept-language': 'th',
     }).toString();
@@ -82,7 +91,26 @@ export function createNominatimGeocoder(opts: NominatimOptions): Geocoder {
     });
     if (!res.ok) throw new Error(`Geocoder HTTP ${res.status}`);
     const body = (await res.json()) as unknown;
-    return Array.isArray(body) && body[0] ? (body[0] as NominatimHit) : null;
+    return Array.isArray(body) ? (body as NominatimHit[]) : [];
+  }
+
+  /**
+   * The best of the top hits: one whose own name matches the text, so "Pathum Wan" picks the
+   * district rather than a station that merely has "Pathum Wan" in its address. With no such
+   * hit, take the first, but trust it no further than a neighbourhood.
+   */
+  function pick(hits: NominatimHit[], q: string): { hit: NominatimHit; rank: number } | null {
+    if (hits.length === 0) return null;
+    const head = (q.split(',')[0] ?? q).trim().toLowerCase();
+    const named = hits.find((h) =>
+      [...Object.values(h.namedetails ?? {}), h.name ?? ''].some((n) => {
+        const name = n.toLowerCase();
+        return head.length > 0 && name.includes(head);
+      }),
+    );
+    const hit = named ?? hits[0]!;
+    const rank = hit.place_rank ?? 0;
+    return { hit, rank: named ? rank : Math.min(rank, NEIGHBOURHOOD_RANK) };
   }
 
   async function lookup(query: string): Promise<GeocodeResult | null> {
@@ -91,13 +119,14 @@ export function createNominatimGeocoder(opts: NominatimOptions): Geocoder {
     const head = query.split(',')[0]?.trim();
     if (head && head !== query) attempts.push(head);
     for (const q of attempts) {
-      const hit = await search(q);
-      if (!hit) continue;
+      const best = pick(await search(q), q);
+      if (!best) continue;
+      const { hit, rank } = best;
       const lat = Number(hit.lat);
       const lng = Number(hit.lon);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-      if ((hit.place_rank ?? 0) < MIN_PLACE_RANK) return null; // a whole province
-      return { lat, lng, label: (hit.display_name ?? q).slice(0, 200) };
+      if (rank < MIN_PLACE_RANK) return null; // a whole province
+      return { lat, lng, label: (hit.display_name ?? q).slice(0, 200), rank };
     }
     return null;
   }

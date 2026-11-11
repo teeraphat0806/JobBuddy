@@ -22,6 +22,7 @@ export function createGeocodeRepository(db: Db): GeocodeRepository {
         lat: result?.lat ?? null,
         lng: result?.lng ?? null,
         label: result?.label ?? null,
+        placeRank: result?.rank ?? null,
         resolvedAt: new Date(),
       };
       await db

@@ -175,6 +175,9 @@ ALTER TABLE "users" ADD COLUMN "last_digest_at" timestamp with time zone;
 UPDATE "user_jobs" SET "applied_at" = CASE WHEN "stage" = 'applied' THEN coalesce("stage_changed_at", "created_at") ELSE "created_at" END WHERE "status" = 'applied';
 UPDATE "user_jobs" SET "responded_at" = coalesce("stage_changed_at", "updated_at") WHERE "status" = 'applied' AND "stage" IS NOT NULL AND "stage" <> 'applied';
 
+-- 0008_geocode_rank
+ALTER TABLE "geocodes" ADD COLUMN "place_rank" integer;
+
 CREATE SCHEMA IF NOT EXISTS drizzle;
 CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
   id SERIAL PRIMARY KEY,
@@ -189,6 +192,7 @@ INSERT INTO drizzle.__drizzle_migrations (hash, created_at) VALUES
   ('5eebfe124dd42029b3e8868bd913f581595897fde6a22d0723e217ae4f429c34', 1794293147776),
   ('ff1c9259f6ee7ea24c6e636a217cd114e3b709a81771888771492680a47a4e08', 1794370015409),
   ('8be86f66fe0f8b851eea2681c5300ff2c7a2d304e0c2c991f038c38aaad67977', 1794372543157),
-  ('330219a35b7c4eb885d0d15b84b27f9270d16b17d695a9a98ffe6a2132858dc2', 1794390754416);
+  ('330219a35b7c4eb885d0d15b84b27f9270d16b17d695a9a98ffe6a2132858dc2', 1794390754416),
+  ('2dcfcbbc644ae1ee09a50734455a8f297bb90116f74eb16496e94638d87267d6', 1794391470927);
 
 COMMIT;

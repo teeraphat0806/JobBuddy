@@ -12,3 +12,5 @@
   - A board's homepage slogan is not a job title. When nothing useful is found, use the placeholder title and ask the user for one.
 - The SSRF guard checks the address on the real socket lookup: no private or reserved IPs, only ports 80/443, and every redirect is re-checked. Keep every page fetch going through it.
 - **Geocoding**: OpenStreetMap Nominatim. Send only public job-location text, at most 1 request per second, with an identifying User-Agent, and cache every result. Show the "© OpenStreetMap contributors" attribution where distances are explained. Never send users' places.
+  - Results keep Nominatim's `place_rank`, which decides how precisely a nearby station may be described (see `src/geo/stations.ts`).
+- **Rail stations**: `src/geo/stationData.ts` is generated once from OpenStreetMap (ODbL) and kept in the code. The line comes from each station's ref code. Regenerate it rather than editing it by hand, and keep the attribution header.

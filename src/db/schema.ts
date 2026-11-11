@@ -254,6 +254,8 @@ export const geocodes = pgTable('geocodes', {
   lng: doublePrecision('lng'),
   /** What the geocoder matched, e.g. "Huai Khwang District, Bangkok". */
   label: text('label'),
+  /** Nominatim place_rank (26+ street / building, 16+ neighbourhood, 12 district). */
+  placeRank: integer('place_rank'),
   resolvedAt: timestamp('resolved_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

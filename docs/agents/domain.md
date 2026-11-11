@@ -15,6 +15,7 @@
 - **Overview stats** (`สรุป`): counts per stage, reply rate and average days to reply, from `user_jobs.applied_at` / `responded_at`. `responded_at` is set the first time an application moves past applied (a rejection counts). Rows from before migration 0007 have estimated times.
 - **Link imports**: a message with more than 10 links is queued (`link_imports`, one batch per message) and saved in the background, one page per site per second. Each user gets one push summary once all their queued links are done; the batches are then deleted. A user can have at most 2,000 queued links.
 - **Places**: up to 5 per user (home, condo...), saved from a shared LINE location. They're used only for straight-line distances to jobs and never sent anywhere.
+- **Nearest station**: shown on job cards, lists and details without needing a home: a station named in the location text, else the nearest station to a street-level point (with a walking distance), or "แถว" for a neighbourhood point. Nothing for district-level points.
 - **Geocodes** cache job-location text to coordinates, shared by all users. Province-level matches are stored as "not found", since they say nothing useful about a commute.
 - **Notes** belong to a user and a job.
 - **Interviews** have a start time and an optional place.
